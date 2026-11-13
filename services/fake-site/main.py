@@ -97,8 +97,8 @@ async def load_target(i: int) -> Response:
     return PlainTextResponse("ok")
 
 
-@app.get("/healthz")
-async def healthz() -> dict:
+@app.get("/health")
+async def health() -> dict:
     return {"status": "ok"}
 
 
