@@ -29,7 +29,14 @@ $env:EDUPULSE_LOCAL_API = "1"
 python -m uvicorn app.main:app --app-dir services/api --host 127.0.0.1
 ```
 
-Open [Swagger UI](http://127.0.0.1:8000/docs) and select `ece1779` or `demo` from `GET /api/courses`.
+Open the [dashboard](http://127.0.0.1:8000/dashboard/) to browse courses, register resources, and report issues. Use [Swagger UI](http://127.0.0.1:8000/docs) to call the REST endpoints directly.
+
+To run the same dashboard and API preview in Docker, use the commands below from the repository root and open the [Docker dashboard](http://127.0.0.1:8000/dashboard/).
+
+```powershell
+docker build -t edupulse-dashboard ./services/api
+docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_LOCAL_API=1 edupulse-dashboard
+```
 
 | Endpoint | Behavior |
 |---|---|

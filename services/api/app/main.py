@@ -2,9 +2,11 @@
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import asyncpg
 from fastapi import FastAPI, Response
+from fastapi.staticfiles import StaticFiles
 
 from .in_memory_registry import InMemoryRegistry
 from .rest_routes import router as rest_router
@@ -32,6 +34,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="EduPulse API", lifespan=lifespan)
 app.include_router(rest_router)
 app.include_router(websocket_router)
+app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent / "dashboard", html=True))
 
 
 @app.get("/health")

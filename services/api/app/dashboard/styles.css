@@ -1,0 +1,56 @@
+:root {
+  font: 16px/1.5 system-ui, sans-serif;
+  color: #172435;
+  background: #f4f6f9;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { width: min(1080px, calc(100% - 2rem)); margin-inline: auto; }
+header { background: #fff; border-bottom: 1px solid #dce2e9; }
+header .shell, .heading, .section-heading, .actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+header .shell { min-height: 64px; }
+header strong { font-size: 1.2rem; }
+main { padding-block: 2rem; }
+h1, h2, p { margin: 0; }
+h1 { font-size: clamp(1.5rem, 5vw, 2.2rem); }
+h2 { font-size: 1.15rem; }
+a { color: #175697; }
+button, input, select, textarea { font: inherit; }
+button, input, select, textarea {
+  border: 1px solid #b8c4d2;
+  border-radius: 6px;
+  padding: .48rem .65rem;
+  color: inherit;
+  background: #fff;
+}
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .55; }
+:focus-visible { outline: 3px solid #3174ba; outline-offset: 2px; }
+.primary { color: white; background: #20578d; border-color: #20578d; }
+.layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1rem; margin-top: 1.25rem; }
+.panel, dialog { background: #fff; border: 1px solid #dce2e9; border-radius: 10px; padding: 1.25rem; }
+fieldset { margin: .8rem 0 0; padding: 0; border: 0; min-width: 0; }
+label { display: grid; gap: .25rem; font-size: .9rem; font-weight: 600; }
+fieldset label, dialog label { margin-bottom: .8rem; }
+#connection, #empty, .muted { color: #526275; font-size: .9rem; }
+#empty, #notice, #report-error, #report-resource { margin-block: .65rem; }
+#notice[data-error], #report-error { color: #9c2430; }
+#resources { padding: 0; margin: .7rem 0; list-style: none; }
+#resources li { border-top: 1px solid #e0e6ed; padding: .8rem 0; overflow-wrap: anywhere; }
+.resource-heading { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.resource-state { background: #edf2f8; color: #2c435d; border-radius: 6px; padding: .12rem .4rem; font-size: .8rem; }
+.resource-details { margin-block: .35rem; }
+#resources button { font-size: .85rem; }
+dialog { width: min(420px, calc(100% - 2rem)); color: inherit; }
+dialog::backdrop { background: #17243566; }
+dialog textarea { resize: vertical; }
+.actions { justify-content: flex-end; }
+@media (max-width: 670px) {
+  .layout { grid-template-columns: 1fr; }
+  .heading { align-items: flex-start; }
+}
