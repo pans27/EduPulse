@@ -1,4 +1,4 @@
-"""Fake course site: a controllable test target for CourseWatch.
+"""Fake course site: a controllable test target for EduPulse.
 
 Each named resource has a mode that decides how /r/{name} responds, so we can
 inject failures on demand for demos and evaluation. Modes are held in memory,
@@ -7,9 +7,10 @@ which is why this service runs as a single replica.
 import asyncio
 import os
 import random
+import time
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
@@ -42,6 +43,8 @@ behaviors: dict[str, Behavior] = {
     "dataset": Behavior(),
 }
 hits: dict[str, int] = {}
+load_hits = 0
+load_since = time.monotonic()
 
 
 def require_admin(token: str | None) -> None:
@@ -92,8 +95,16 @@ async def login() -> str:
 
 
 @app.api_route("/load/{i}", methods=["GET", "HEAD"])
-async def load_target(i: int) -> Response:
-    """Stateless always-OK targets for the 2,000-resource load test."""
+async def load_target(i: int, delay_ms: int = Query(0, ge=0, le=10_000)) -> Response:
+    """Always-OK targets for the 2,000-resource load test.
+
+    delay_ms simulates a slow origin, so worker throughput is bounded by
+    concurrency / delay (e.g. 10 concurrent checks at 500 ms = 20 checks/s).
+    """
+    global load_hits
+    load_hits += 1
+    if delay_ms:
+        await asyncio.sleep(delay_ms / 1000)
     return PlainTextResponse("ok")
 
 
@@ -114,3 +125,19 @@ async def set_behavior(name: str, b: Behavior, x_admin_token: str | None = Heade
     behaviors[name] = b
     hits[name] = 0
     return {name: b.model_dump()}
+
+
+@app.get("/admin/load-stats")
+async def load_stats(x_admin_token: str | None = Header(None)) -> dict:
+    """Requests served by /load since the last reset; the load test reads the rate from here."""
+    require_admin(x_admin_token)
+    elapsed = time.monotonic() - load_since
+    return {"hits": load_hits, "seconds": round(elapsed, 1), "per_second": round(load_hits / elapsed, 2)}
+
+
+@app.post("/admin/load-stats/reset")
+async def reset_load_stats(x_admin_token: str | None = Header(None)) -> dict:
+    global load_hits, load_since
+    require_admin(x_admin_token)
+    load_hits, load_since = 0, time.monotonic()
+    return {"hits": 0}
