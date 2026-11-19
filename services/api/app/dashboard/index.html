@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduPulse Dashboard</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./dashboard.js" defer></script>
+</head>
+<body>
+  <header><div class="shell"><strong>EduPulse</strong><a href="/docs">API docs</a></div></header>
+  <main class="shell">
+    <div class="heading">
+      <div><h1>Course resources</h1><p id="connection" role="status">Connecting…</p></div>
+      <label>Course <select id="course" disabled></select></label>
+    </div>
+    <p id="notice" role="status" hidden></p>
+    <div class="layout">
+      <section class="panel" aria-labelledby="resources-title">
+        <div class="section-heading"><h2 id="resources-title">Resources</h2><button id="refresh" type="button" disabled>Refresh</button></div>
+        <p id="empty">Loading resources…</p>
+        <ul id="resources"></ul>
+        <p id="metrics" class="muted"></p>
+      </section>
+      <section class="panel" aria-labelledby="add-title">
+        <h2 id="add-title">Register a resource</h2>
+        <form id="register">
+          <fieldset id="register-fields" disabled>
+            <label>Name<input name="name" required maxlength="120"></label>
+            <label>Resource URL<input name="url" type="url" required placeholder="https://"></label>
+            <label>Check interval in seconds<input name="interval" type="number" min="1" value="60" required></label>
+            <label>Expected release (optional)<input name="release" type="datetime-local"></label>
+            <button class="primary">Register</button>
+          </fieldset>
+        </form>
+      </section>
+    </div>
+  </main>
+  <dialog id="report-dialog" aria-labelledby="report-title">
+    <form id="report">
+      <h2 id="report-title">Report an issue</h2>
+      <p id="report-resource"></p>
+      <label>Description<textarea name="description" required maxlength="2000" rows="4"></textarea></label>
+      <p id="report-error" role="alert" hidden></p>
+      <div class="actions"><button type="button" id="cancel">Cancel</button><button type="submit" class="primary">Submit report</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
