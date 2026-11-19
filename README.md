@@ -13,10 +13,10 @@ docker compose up -d --build
 
 | Service | URL | Notes |
 |---|---|---|
-| Nginx | http://localhost/health | Reverse proxy to the API, including WebSocket upgrades; same path layout as production |
-| API (direct) | http://localhost:8000/health | Placeholder until the real API lands |
+| API | http://localhost:8000/health | Placeholder until the real API lands |
 | Fake course site | http://localhost:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
 | PostgreSQL 18 | localhost:5432 | Credentials from `.env`; data in the `pgdata` volume |
+| Nginx | http://localhost/health | Reverse proxy to the API, including WebSocket upgrades; same path layout as production |
 
 `docker compose down` keeps the database; `docker compose down -v` deletes it.
 
