@@ -1,0 +1,142 @@
+# Swarm stack. Deploy from the manager:
+#   REGISTRY=... TAG=... docker stack deploy -c infra/swarm/stack.yml edupulse
+# Images are prebuilt (Swarm ignores `build:`); secrets are created once with `docker secret create`.
+
+x-db-client: &db-client
+  environment:
+    POSTGRES_DB: edupulse
+    POSTGRES_USER: edupulse
+  secrets:
+    - pg_password
+  configs:
+    - source: db_env
+      target: /usr/local/bin/db-env.sh
+      mode: 0555
+  entrypoint: ["/usr/local/bin/db-env.sh"]
+  networks:
+    - backend
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: edupulse
+      POSTGRES_USER: edupulse
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
+    volumes:
+      - pgdata:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edupulse -d edupulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        # The data lives on this node's disk (later the attached DO Volume), so Postgres must not move.
+        constraints: [node.labels.db == true]
+      resources:
+        limits: {memory: 512M}
+
+  api:
+    <<: *db-client
+    image: ${REGISTRY:-edupulse}/api:${TAG:-dev}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    deploy:
+      replicas: 3
+      placement:
+        # Swarm spreads replicas across eligible nodes by default. A hard per-node cap would block
+        # start-first updates, which need one spare slot for the new replica.
+        constraints: [node.labels.app == true]
+      update_config:
+        # Replace one replica at a time and start the new one before stopping the old one.
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      resources:
+        limits: {memory: 192M}
+
+  worker:
+    <<: *db-client
+    image: ${REGISTRY:-edupulse}/worker:${TAG:-dev}
+    command: ["python", "-m", "worker"]
+    environment:
+      POSTGRES_DB: edupulse
+      POSTGRES_USER: edupulse
+      FAKE_SITE_URL: http://fake-site:8000
+    deploy:
+      replicas: 2
+      placement:
+        constraints: [node.labels.app == true]
+      update_config: {parallelism: 1, order: start-first}
+      resources:
+        limits: {memory: 128M}
+
+  fake-site:
+    image: ${REGISTRY:-edupulse}/fake-site:${TAG:-dev}
+    environment:
+      FAKE_ADMIN_TOKEN_FILE: /run/secrets/fake_admin_token
+    secrets:
+      - fake_admin_token
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.fakesite == true]
+      resources:
+        limits: {memory: 96M}
+
+  nginx:
+    image: nginx:1.28-alpine
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      # Host mode binds port 80 on the manager itself instead of the routing mesh,
+      # so Nginx sees the real client IP and only the manager accepts web traffic.
+      - {target: 80, published: 80, protocol: tcp, mode: host}
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits: {memory: 64M}
+
+networks:
+  backend:
+    driver: overlay
+    # Lets one-off containers (psql, migrations, load tests) join with `docker run --network edupulse_backend`.
+    attachable: true
+
+volumes:
+  pgdata:
+
+secrets:
+  pg_password:
+    external: true
+  fake_admin_token:
+    external: true
+
+configs:
+  # Configs are immutable; the name carries a version so an edited file can be rolled out.
+  nginx_conf:
+    name: nginx_conf_${NGINX_CONF_VERSION:-1}
+    file: ../nginx/default.conf
+  db_env:
+    name: db_env_${DB_ENV_VERSION:-1}
+    file: ./db-env.sh

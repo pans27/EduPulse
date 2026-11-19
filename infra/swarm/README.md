@@ -76,7 +76,8 @@ Back on the manager, label the nodes (placement constraints in the stack file us
 
 ```bash
 docker node update --label-add db=true edupulse-manager
-docker node update --label-add fakesite=true edupulse-node-2
+docker node update --label-add app=true edupulse-node-1
+docker node update --label-add app=true --label-add fakesite=true edupulse-node-2
 docker node ls
 docker node inspect edupulse-manager edupulse-node-2 --format '{{.Description.Hostname}} {{.Spec.Labels}}'
 ```
@@ -94,6 +95,48 @@ docker service rm smoke && docker network rm smoke
 ```
 
 Expected: `docker node ls` shows 3 nodes `Ready`/`Active`; the three replicas land on three different nodes; curl prints `200`. Port 8080 stays unreachable from the internet because no firewall rule allows it.
+
+## 6. Deploy the stack
+
+[`stack.yml`](stack.yml) runs the same services as Compose, with Swarm-only additions:
+
+| Feature | How |
+|---|---|
+| Passwords stay out of the stack file | `pg_password` and `fake_admin_token` are Docker secrets, mounted at `/run/secrets/`. Postgres reads `POSTGRES_PASSWORD_FILE`; API and worker get `DATABASE_URL` from the [`db-env.sh`](db-env.sh) entrypoint shim |
+| Placement | Postgres on `db=true`, fake site on `fakesite=true`, API and workers on `app=true`, Nginx on the manager |
+| Zero-downtime API updates | `parallelism: 1`, `order: start-first`, automatic rollback on failure |
+| Self-healing | Swarm restarts failed tasks; the image healthchecks mark unhealthy replicas |
+| Real client IPs | Nginx publishes port 80 in host mode (not the routing mesh); uvicorn runs with `--proxy-headers` |
+| Config files across nodes | `nginx/default.conf` and `db-env.sh` ship as Swarm configs, not bind mounts. To change one, bump `NGINX_CONF_VERSION` / `DB_ENV_VERSION` and redeploy |
+
+On the manager, once:
+
+```bash
+openssl rand -hex 24 | tr -d '\n' | docker secret create pg_password -
+openssl rand -hex 24 | tr -d '\n' | docker secret create fake_admin_token -
+```
+
+Then, from a checkout of the repo on the manager (images must already be in the registry):
+
+```bash
+REGISTRY=registry.digitalocean.com/<registry> TAG=<git-sha> \
+  docker stack deploy --with-registry-auth -c infra/swarm/stack.yml edupulse
+docker stack services edupulse
+```
+
+Postgres only reads `POSTGRES_PASSWORD_FILE` when it initializes an empty data directory. Rotating the secret later also needs `ALTER USER edupulse PASSWORD ...`.
+
+### Tested locally (single-node Swarm on Docker Desktop, 2026-11-19)
+
+| Check | Result |
+|---|---|
+| All services converge | api 3/3, worker 2/2, postgres, fake site, nginx 1/1 |
+| `/health` through Nginx | 200, database ok, with the password only in the secret |
+| `docker service inspect` | No password in the service environment |
+| Kill one API container | 2/3 → 3/3 within 20 s |
+| `docker service update --force edupulse_api` while polling `/health` 4×/s | 200/200 requests succeeded, update completed in about 40 s |
+
+A first version capped API replicas at 2 per node; the start-first update then had no free slot for the new replica and hung. The label constraint replaced the cap.
 
 ## Teardown
 
