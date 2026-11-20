@@ -47,7 +47,9 @@ class PostgresNotifications:
             else:
                 queue.put_nowait(resource_id)
 
-    def _receive(self, connection: asyncpg.Connection, pid: int, channel: str, payload: str) -> None:
+    def _receive(
+        self, _connection: asyncpg.Connection, _sender_process_id: int, _channel: str, payload: str
+    ) -> None:
         # Forward the opaque resource ID without assuming a database ID type.
         if payload.strip():
             self._publish(payload)
@@ -65,8 +67,8 @@ class PostgresNotifications:
                 logger.info("Listening for PostgreSQL resource updates on %s", self.channel)
                 await disconnected.wait()
                 logger.warning("PostgreSQL resource listener connection closed")
-            except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
-                logger.warning("PostgreSQL resource listener disconnected (%s)", type(exc).__name__)
+            except (asyncpg.PostgresError, OSError, TimeoutError) as error:
+                logger.warning("PostgreSQL resource listener disconnected (%s)", type(error).__name__)
             finally:
                 if connection is not None and not connection.is_closed():
                     connection.terminate()

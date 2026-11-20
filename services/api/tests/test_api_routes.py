@@ -1,11 +1,14 @@
 import os
 from datetime import UTC, datetime, timedelta
 from unittest import TestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 
 from app.main import app
+from app.registry_models import CourseRow
 
 
 RESOURCES = "/api/courses/ece1779/resources"
@@ -71,9 +74,36 @@ class PreviewRoutesTests(TestCase):
 
 
 class DefaultModeTests(TestCase):
-    def test_course_routes_require_shared_storage(self):
-        # Keep preview routes gated when the API runs in its default mode.
-        environment = {"EDUPULSE_LOCAL_API": "0", "DATABASE_URL": "postgresql://unused"}
-        with patch.dict(os.environ, environment), patch("app.main.asyncpg.create_pool", new_callable=AsyncMock):
-            with TestClient(app) as client:
-                self.assertEqual(client.get("/api/courses").status_code, 503)
+    def setUp(self):
+        # Run database mode against a mock ORM session with local-only options disabled.
+        environment = {
+            "EDUPULSE_LOCAL_API": "0",
+            "DATABASE_URL": "postgresql://unused",
+            "EDUPULSE_RESOURCE_NOTIFY_CHANNEL": "",
+            "EDUPULSE_DATABASE_WRITES": "0",
+        }
+        self.enterContext(patch.dict(os.environ, environment))
+        self.session = AsyncMock()
+        self.sessions = MagicMock()
+        self.sessions.return_value.__aenter__.return_value = self.session
+        self.enterContext(patch("app.main.create_async_engine", return_value=AsyncMock()))
+        self.enterContext(patch("app.main.async_sessionmaker", return_value=self.sessions))
+        self.client = self.enterContext(TestClient(app))
+
+    def test_course_routes_read_postgresql(self):
+        # Return database courses through the same API response shape as preview mode.
+        courses = [{"id": "test", "name": "Test Course"}]
+        self.session.scalars.return_value = [CourseRow(**course) for course in courses]
+        self.assertEqual(self.client.get("/api/courses").json(), courses)
+        self.session.scalars.assert_awaited_once()
+
+    def test_missing_schema_returns_service_unavailable(self):
+        # Tell local operators to migrate an empty database.
+        self.session.scalars.side_effect = ProgrammingError(None, None, asyncpg.UndefinedTableError())
+        self.assertEqual(self.client.get("/api/courses").status_code, 503)
+
+    def test_database_mutations_require_opt_in(self):
+        # Reject unauthenticated writes in database mode by default.
+        response = self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"})
+        self.assertEqual(response.status_code, 403)
+        self.sessions.begin.assert_not_called()

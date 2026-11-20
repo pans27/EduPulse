@@ -23,7 +23,8 @@ class ResourceCreate(BaseModel):
 
     name: Name
     url: HttpUrl
-    check_interval_seconds: int = Field(default=60, ge=1)
+    # Default to 60 seconds and allow 1 through PostgreSQL's INTEGER maximum, inclusive.
+    check_interval_seconds: int = Field(default=60, ge=1, le=2_147_483_647)
     release_at: AwareDatetime | None = None
 
     @field_validator("url")

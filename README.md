@@ -4,21 +4,19 @@ ECE1779 final project: course resource monitoring. See [docs/proposal.md](docs/p
 
 ## Local quickstart
 
-Requires Docker Desktop.
+Requires Docker Desktop. From PowerShell at the repository root, start the local stack with the sample development credentials:
 
-```bash
-cp .env.example .env
-docker compose up -d --build
+```powershell
+docker compose --env-file .env.example up -d --build --wait
 ```
 
 | Service | URL | Notes |
 |---|---|---|
-| API | http://localhost:8000/health | PostgreSQL connectivity check |
-| Fake course site | http://localhost:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
-| PostgreSQL 18 | localhost:5432 | Credentials from `.env`; data in the `pgdata` volume |
-| Nginx | http://localhost/health | Reverse proxy to the API, including WebSocket upgrades; same path layout as production |
+| Dashboard | http://127.0.0.1:8082/dashboard/ | Served through Nginx with WebSocket upgrades |
+| API | http://127.0.0.1:8082/docs | Swagger UI through Nginx |
+| Fake course site | http://127.0.0.1:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
 
-`docker compose down` keeps the database; `docker compose down -v` deletes it.
+Apply the migration below when starting with a fresh database. Stop the stack with `docker compose --env-file .env.example down` to keep the database volume.
 
 ## API development preview
 
@@ -48,13 +46,29 @@ docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_
 | `WS /api/courses/{course_id}/ws` | Sends a `course.snapshot` on connect and when a resource is registered or reported. Reconnecting reads the current snapshot. |
 | `GET /api/metrics` | Returns counts of registered resources and student reports in the preview. |
 
-With preview mode disabled, `/health` checks PostgreSQL and the course API returns 503 pending the shared storage integration. The preview records due times for the dashboard. The worker integration will execute checks, apply the health state machine, and record check results and incidents.
+## PostgreSQL-backed Docker preview
 
-For the Nov 15–21 real-time milestone, each API replica can subscribe to PostgreSQL using a dedicated asyncpg connection. Set `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` to the channel agreed with the worker and use the resource ID as the plain-text payload. The listener runs in database mode and reconnects after a connection loss. Its internal subscribers receive resource IDs and a resync signal after each subscription to PostgreSQL. Connecting that feed to dashboard snapshots requires Byan's shared schema so the API can read committed resource status and resolve course membership. The Nov 25–Dec 5 authentication milestone adds Argon2 and course membership authorization before enabling shared access.
+The local Compose file enables unauthenticated writes for development and publishes Nginx and the fake site on loopback.
+
+Apply the schema from the schema branch and add a demo course on a fresh database. Exporting the migration lets you run it without switching your working branch.
+
+```powershell
+$schemaDir = Join-Path $env:TEMP ("edupulse-schema-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $schemaDir | Out-Null
+$archive = Join-Path $schemaDir "schema.zip"
+git archive --format=zip --output=$archive origin/feat/database-schema alembic.ini db
+Expand-Archive -LiteralPath $archive -DestinationPath $schemaDir
+docker compose --env-file .env.example run --rm --no-deps -v "${schemaDir}:/migration:ro" -w /migration api sh -ec "pip install -q alembic psycopg2-binary && alembic upgrade head"
+docker compose --env-file .env.example exec -T postgres psql -U edupulse -d edupulse -v ON_ERROR_STOP=1 -c "INSERT INTO courses (id, name) VALUES ('demo', 'Demo Course') ON CONFLICT (id) DO NOTHING"
+```
+
+Registrations and reports persist in PostgreSQL through SQLAlchemy's async ORM. The API image includes mappings for the existing migration and uses asyncpg for its dedicated notification connection. Alembic remains responsible for schema changes. The worker currently checks database connectivity, so resources await their first check until the monitoring worker is integrated.
+
+In database mode, set `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` to the channel agreed with the worker. Local Compose uses `resource_updates` with a plain-text resource UUID. Each API replica listens on a dedicated connection and refreshes affected WebSocket snapshots from committed PostgreSQL rows. It also refreshes snapshots after reconnecting to PostgreSQL. Leave `EDUPULSE_DATABASE_WRITES` disabled outside local development until course authorization is implemented.
 
 ## API tests
 
-Run from the repository root with Python 3.12. The tests use the in-memory preview and a mocked database pool.
+Run from the repository root with Python 3.12. The tests use the in-memory preview and a mocked ORM session.
 
 ```powershell
 python -m pip install -r services/api/requirements-test.txt
