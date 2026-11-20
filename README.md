@@ -50,7 +50,7 @@ docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_
 
 With preview mode disabled, `/health` checks PostgreSQL and the course API returns 503 pending the shared storage integration. The preview records due times for the dashboard. The worker integration will execute checks, apply the health state machine, and record check results and incidents.
 
-For the Nov 15–21 real-time milestone, the cross-replica integration needs Byan's migration and the worker's PostgreSQL notification channel and resource ID payload. API replicas can then refresh the affected course from PostgreSQL and send the current snapshot. The Nov 25–Dec 5 authentication milestone adds Argon2 and course membership authorization before enabling shared access.
+For the Nov 15–21 real-time milestone, each API replica can subscribe to PostgreSQL using a dedicated asyncpg connection. Set `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` to the channel agreed with the worker and use the resource ID as the plain-text payload. The listener runs in database mode and reconnects after a connection loss. Its internal subscribers receive resource IDs and a resync signal after each subscription to PostgreSQL. Connecting that feed to dashboard snapshots requires Byan's shared schema so the API can read committed resource status and resolve course membership. The Nov 25–Dec 5 authentication milestone adds Argon2 and course membership authorization before enabling shared access.
 
 ## API tests
 

@@ -1,7 +1,8 @@
 """EduPulse FastAPI entry point."""
 
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import asyncpg
@@ -9,6 +10,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 
 from .in_memory_registry import InMemoryRegistry
+from .postgres_notifications import PostgresNotifications
 from .rest_routes import router as rest_router
 from .websocket_routes import router as websocket_router
 
@@ -24,11 +26,21 @@ async def lifespan(app: FastAPI):
         if database_url
         else None
     )
+    channel = os.getenv("EDUPULSE_RESOURCE_NOTIFY_CHANNEL")
+    notifications = PostgresNotifications(database_url, channel) if database_url and channel and not local else None
+    app.state.resource_notifications = notifications
+    listener_task = asyncio.create_task(notifications.run()) if notifications else None
     try:
         yield
     finally:
-        if app.state.pool is not None:
-            await app.state.pool.close()
+        try:
+            if listener_task is not None:
+                listener_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await listener_task
+        finally:
+            if app.state.pool is not None:
+                await app.state.pool.close()
 
 
 app = FastAPI(title="EduPulse API", lifespan=lifespan)
