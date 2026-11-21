@@ -4,21 +4,25 @@ ECE1779 final project: course resource monitoring. See [docs/proposal.md](docs/p
 
 ## Local quickstart
 
-Requires Docker Desktop.
+Requires Docker Desktop. From the repository root, run this command in Bash or PowerShell.
 
-```bash
-cp .env.example .env
-docker compose up -d --build
+```sh
+docker compose --env-file .env.example up -d --build --wait
 ```
 
 | Service | URL | Notes |
 |---|---|---|
-| API | http://localhost:8000/health | PostgreSQL connectivity check |
-| Fake course site | http://localhost:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
-| PostgreSQL 18 | localhost:5432 | Credentials from `.env`; data in the `pgdata` volume |
-| Nginx | http://localhost/health | Reverse proxy to the API, including WebSocket upgrades; same path layout as production |
+| Dashboard | http://127.0.0.1/dashboard/ | Served through Nginx with WebSocket upgrades |
+| API | http://127.0.0.1/docs | Swagger UI through Nginx |
+| Fake course site | http://127.0.0.1:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
 
-`docker compose down` keeps the database; `docker compose down -v` deletes it.
+If you have an ignored `docker-compose.local.yml` override, use the command below and open the dashboard on the Nginx port configured in that file.
+
+```sh
+docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.local.yml up -d --build --wait
+```
+
+To stop the stack and keep its database volume, use the same Compose options with `down`.
 
 ## API development preview
 
@@ -48,13 +52,19 @@ docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_
 | `WS /api/courses/{course_id}/ws` | Sends a `course.snapshot` on connect and when a resource is registered or reported. Reconnecting reads the current snapshot. |
 | `GET /api/metrics` | Returns counts of registered resources and student reports in the preview. |
 
-With preview mode disabled, `/health` checks PostgreSQL and the course API returns 503 pending the shared storage integration. The preview records due times for the dashboard. The worker integration will execute checks, apply the health state machine, and record check results and incidents.
+## PostgreSQL-backed Docker preview
 
-For the Nov 15–21 real-time milestone, the cross-replica integration needs Byan's migration and the worker's PostgreSQL notification channel and resource ID payload. API replicas can then refresh the affected course from PostgreSQL and send the current snapshot. The Nov 25–Dec 5 authentication milestone adds Argon2 and course membership authorization before enabling shared access.
+The local override enables unauthenticated writes for development and binds Nginx and the fake site to loopback.
+
+Fresh databases require the Compose migration service introduced by [PR #10](https://github.com/pans27/EduPulse/pull/10). With that change, Compose runs Alembic before starting the API. The dashboard lists courses once they are provisioned.
+
+Registrations and reports persist in PostgreSQL through SQLAlchemy's async ORM. The API image includes mappings for the existing migration and uses asyncpg for its dedicated notification connection. Alembic remains responsible for schema changes. The worker currently checks database connectivity, so resources await their first check until the monitoring worker is integrated.
+
+In database mode, set `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` to the channel agreed with the worker. Local Compose uses `resource_updates` with a plain-text resource UUID. Each API replica listens on a dedicated connection and refreshes affected WebSocket snapshots from committed PostgreSQL rows. It also refreshes snapshots after reconnecting to PostgreSQL. Leave `EDUPULSE_DATABASE_WRITES` disabled outside local development until course authorization is implemented.
 
 ## API tests
 
-Run from the repository root with Python 3.12. The tests use the in-memory preview and a mocked database pool.
+Run from the repository root with Python 3.12. The tests use the in-memory preview and a mocked ORM session.
 
 ```powershell
 python -m pip install -r services/api/requirements-test.txt
