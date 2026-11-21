@@ -4,19 +4,25 @@ ECE1779 final project: course resource monitoring. See [docs/proposal.md](docs/p
 
 ## Local quickstart
 
-Requires Docker Desktop. From PowerShell at the repository root, start the local stack with the sample development credentials:
+Requires Docker Desktop. From the repository root, run this command in Bash or PowerShell.
 
-```powershell
+```sh
 docker compose --env-file .env.example up -d --build --wait
 ```
 
 | Service | URL | Notes |
 |---|---|---|
-| Dashboard | http://127.0.0.1:8082/dashboard/ | Served through Nginx with WebSocket upgrades |
-| API | http://127.0.0.1:8082/docs | Swagger UI through Nginx |
+| Dashboard | http://127.0.0.1/dashboard/ | Served through Nginx with WebSocket upgrades |
+| API | http://127.0.0.1/docs | Swagger UI through Nginx |
 | Fake course site | http://127.0.0.1:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
 
-Apply the migration below when starting with a fresh database. Stop the stack with `docker compose --env-file .env.example down` to keep the database volume.
+If you have an ignored `docker-compose.local.yml` override, use the command below and open the dashboard on the Nginx port configured in that file.
+
+```sh
+docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.local.yml up -d --build --wait
+```
+
+To stop the stack and keep its database volume, use the same Compose options with `down`.
 
 ## API development preview
 
@@ -48,19 +54,9 @@ docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_
 
 ## PostgreSQL-backed Docker preview
 
-The local Compose file enables unauthenticated writes for development and publishes Nginx and the fake site on loopback.
+The local override enables unauthenticated writes for development and binds Nginx and the fake site to loopback.
 
-Apply the schema from the schema branch and add a demo course on a fresh database. Exporting the migration lets you run it without switching your working branch.
-
-```powershell
-$schemaDir = Join-Path $env:TEMP ("edupulse-schema-" + [guid]::NewGuid())
-New-Item -ItemType Directory -Path $schemaDir | Out-Null
-$archive = Join-Path $schemaDir "schema.zip"
-git archive --format=zip --output=$archive origin/feat/database-schema alembic.ini db
-Expand-Archive -LiteralPath $archive -DestinationPath $schemaDir
-docker compose --env-file .env.example run --rm --no-deps -v "${schemaDir}:/migration:ro" -w /migration api sh -ec "pip install -q alembic psycopg2-binary && alembic upgrade head"
-docker compose --env-file .env.example exec -T postgres psql -U edupulse -d edupulse -v ON_ERROR_STOP=1 -c "INSERT INTO courses (id, name) VALUES ('demo', 'Demo Course') ON CONFLICT (id) DO NOTHING"
-```
+Fresh databases require the Compose migration service introduced by [PR #10](https://github.com/pans27/EduPulse/pull/10). With that change, Compose runs Alembic before starting the API. The dashboard lists courses once they are provisioned.
 
 Registrations and reports persist in PostgreSQL through SQLAlchemy's async ORM. The API image includes mappings for the existing migration and uses asyncpg for its dedicated notification connection. Alembic remains responsible for schema changes. The worker currently checks database connectivity, so resources await their first check until the monitoring worker is integrated.
 
