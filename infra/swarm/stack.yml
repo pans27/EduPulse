@@ -42,6 +42,21 @@ services:
       resources:
         limits: {memory: 512M}
 
+  migrate:
+    <<: *db-client
+    image: ${REGISTRY:-edupulse}/migrate:${TAG:-dev}
+    command: ["alembic", "upgrade", "head"]
+    deploy:
+      # Runs to completion once per deploy instead of being kept running. Swarm has no depends_on,
+      # so it retries while Postgres is still starting; the API answers 503 until the tables exist.
+      mode: replicated-job
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+      placement:
+        constraints: [node.labels.db == true]
+
   api:
     <<: *db-client
     image: ${REGISTRY:-edupulse}/api:${TAG:-dev}
