@@ -46,6 +46,13 @@ services:
     <<: *db-client
     image: ${REGISTRY:-edupulse}/api:${TAG:-dev}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    environment:
+      # Merge keys replace the anchor's environment rather than extending it, so repeat the DB names.
+      POSTGRES_DB: edupulse
+      POSTGRES_USER: edupulse
+      # Each replica LISTENs on this channel and pushes resource changes to its WebSocket clients,
+      # so a client connected to any replica sees updates written through any other.
+      EDUPULSE_RESOURCE_NOTIFY_CHANNEL: resource_updates
     deploy:
       replicas: 3
       placement:
