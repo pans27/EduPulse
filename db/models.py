@@ -36,7 +36,10 @@ class Resource(Base):
     __tablename__ = "resources"
 
     id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     course_id: Mapped[str] = mapped_column(
         String(100),
@@ -90,6 +93,7 @@ class Resource(Base):
             "'DOWN', 'AUTH_REQUIRED', 'MISSING')",
             name="ck_resources_state",
         ),
+        UniqueConstraint("course_id", "url", name="uq_resources_course_url"),
         Index("ix_resources_due", "next_check_at", "lease_until"),
     )
 
@@ -99,11 +103,14 @@ class CheckResult(Base):
     __tablename__ = "check_results"
 
     id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     resource_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("resources.id"),
+        ForeignKey("resources.id", ondelete="CASCADE"),
         nullable=False,
     )
     checked_at: Mapped[datetime] = mapped_column(
@@ -142,11 +149,14 @@ class Incident(Base):
     __tablename__ = "incidents"
 
     id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     resource_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("resources.id"),
+        ForeignKey("resources.id", ondelete="CASCADE"),
         nullable=False,
     )
     opened_at: Mapped[datetime] = mapped_column(
@@ -169,6 +179,12 @@ class Incident(Base):
             "resolved_at IS NULL OR resolved_at >= opened_at",
             name="ck_incidents_resolution_time",
         ),
+        CheckConstraint(
+            "state IN ("
+            "'HEALTHY', 'DEGRADED', 'SUSPECT', "
+            "'DOWN', 'AUTH_REQUIRED', 'MISSING')",
+            name="ck_incidents_state",
+        ),
         Index(
             "uq_incidents_one_open_per_resource",
             "resource_id",
@@ -183,11 +199,14 @@ class StudentReport(Base):
     __tablename__ = "student_reports"
 
     id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     resource_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("resources.id"),
+        ForeignKey("resources.id", ondelete="CASCADE"),
         nullable=False,
     )
     description: Mapped[str] = mapped_column(
