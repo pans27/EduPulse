@@ -1,0 +1,6 @@
+# Only the migrate image builds from the repository root (db/Dockerfile).
+# Allow-list what it needs so .env, .git and the other services never enter the build context.
+*
+!alembic.ini
+!db/
+**/__pycache__
