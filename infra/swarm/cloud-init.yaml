@@ -1,5 +1,5 @@
 #cloud-config
-# Paste into "Advanced options → Add initialization scripts (user data)" when creating each Droplet.
+# Paste into "Advanced options > Add initialization scripts (user data)" when creating each Droplet.
 # Same file for all three nodes; roles are assigned later with docker swarm init/join.
 
 package_update: true
