@@ -104,6 +104,7 @@ Expected: `docker node ls` shows 3 nodes `Ready`/`Active`; the three replicas la
 |---|---|
 | Passwords stay out of the stack file | `pg_password` and `fake_admin_token` are Docker secrets, mounted at `/run/secrets/`. Postgres reads `POSTGRES_PASSWORD_FILE`; API and worker get `DATABASE_URL` from the [`db-env.sh`](db-env.sh) entrypoint shim |
 | Placement | Postgres on `db=true`, fake site on `fakesite=true`, API and workers on `app=true`, Nginx on the manager |
+| Schema migrations | `migrate` is a `replicated-job`: it runs `alembic upgrade head` to completion on every `stack deploy` and retries (up to 10 times, 5 s apart) while Postgres is still starting. Swarm has no `depends_on`, so the API answers 503 until the tables exist. Re-running is a no-op at head |
 | Zero-downtime API updates | `parallelism: 1`, `order: start-first`, automatic rollback on failure |
 | Self-healing | Swarm restarts failed tasks; the image healthchecks mark unhealthy replicas |
 | Real client IPs | Nginx publishes port 80 in host mode (not the routing mesh); uvicorn runs with `--proxy-headers` |
@@ -126,6 +127,8 @@ docker stack services edupulse
 
 Postgres only reads `POSTGRES_PASSWORD_FILE` when it initializes an empty data directory. Rotating the secret later also needs `ALTER USER edupulse PASSWORD ...`.
 
+To re-run migrations without a full deploy: `docker service update --force edupulse_migrate`. Check the result with `docker service ps edupulse_migrate` (state `Complete`) and `docker service logs edupulse_migrate`.
+
 ### Tested locally (single-node Swarm on Docker Desktop, 2026-11-19)
 
 | Check | Result |
@@ -137,6 +140,14 @@ Postgres only reads `POSTGRES_PASSWORD_FILE` when it initializes an empty data d
 | `docker service update --force edupulse_api` while polling `/health` 4×/s | 200/200 requests succeeded, update completed in about 40 s |
 
 A first version capped API replicas at 2 per node; the start-first update then had no free slot for the new replica and hung. The label constraint replaced the cap.
+
+### Migrate job (tested 2026-11-21, same setup)
+
+| Check | Result |
+|---|---|
+| Fresh deploy | Job failed twice (`could not translate host name "postgres"`) while Postgres started, then completed; `alembic_version` = head, 5 tables |
+| `/health` through Nginx after the job | 200, database ok |
+| Same-spec redeploy and `--force` | Job re-ran and completed; no `Running upgrade` (no-op at head) |
 
 ## Teardown
 
