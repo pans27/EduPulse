@@ -1,6 +1,4 @@
-# Local development stack. DigitalOcean uses infra/swarm/stack.yml.
-name: edupulse-pg-preview
-
+# Local development stack. The Swarm stack file in infra/ reuses these service definitions.
 services:
   postgres:
     image: postgres:18
@@ -11,6 +9,8 @@ services:
     volumes:
       # postgres:18 keeps its data under /var/lib/postgresql/18/docker, so mount the parent.
       - pgdata:/var/lib/postgresql
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -21,8 +21,8 @@ services:
     build: ./services/api
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      EDUPULSE_DATABASE_WRITES: "1"
-      EDUPULSE_RESOURCE_NOTIFY_CHANNEL: resource_updates
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,7 +41,7 @@ services:
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "127.0.0.1:8082:80"
+      - "80:80"
     depends_on:
       api:
         condition: service_healthy
@@ -56,7 +56,7 @@ services:
     environment:
       FAKE_ADMIN_TOKEN: ${FAKE_ADMIN_TOKEN}
     ports:
-      - "127.0.0.1:8001:8000"
+      - "8001:8000"
 
 volumes:
   pgdata:

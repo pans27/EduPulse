@@ -1,5 +1,6 @@
 # Secrets and local config
 .env
+/docker-compose.local.yml
 *.pem
 secrets/
 
