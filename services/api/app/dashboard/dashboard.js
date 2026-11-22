@@ -11,23 +11,6 @@ let requestVersion = 0;
 let reportPath;
 let accountSession;
 
-// Send a same-origin API request and expose any validation message.
-async function api(path, data, method = "POST") {
-  const response = await fetch(path, data === undefined ? {} : {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  const result = response.status === 204 ? null : await response.json();
-  if (!response.ok) {
-    const detail = Array.isArray(result.detail)
-      ? result.detail.map((issue) => issue.msg).join(" ")
-      : result.detail;
-    throw new Error(detail || `Request failed (${response.status}).`);
-  }
-  return result;
-}
-
 // Show feedback after a dashboard action.
 function notice(message, error = false) {
   const element = byId("notice");
@@ -89,18 +72,6 @@ async function refreshResources() {
   }
 }
 
-// Load the preview totals across courses.
-async function refreshMetrics() {
-  if (!accountSession?.is_admin) return;
-  try {
-    const metrics = await api("/api/metrics");
-    byId("metrics").textContent =
-      `Across all courses · ${metrics.registered_resources} resources · ${metrics.student_reports} reports`;
-  } catch {
-    byId("metrics").textContent = "Metrics unavailable.";
-  }
-}
-
 // Subscribe to the selected course and reconnect after a dropped connection.
 function connect(id, currentSelection) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -114,7 +85,6 @@ function connect(id, currentSelection) {
     if (selection === currentSelection && snapshot.type === "course.snapshot" && snapshot.course.id === id) {
       requestVersion++;
       renderResources(snapshot.resources);
-      void refreshMetrics();
     }
   };
   connection.onclose = () => {
@@ -165,7 +135,6 @@ async function registerResource(event) {
     });
     register.reset();
     if (selectedCourse === course.value) void refreshResources();
-    void refreshMetrics();
     notice("Resource registered.");
   } catch (error) {
     notice(error.message, true);
@@ -187,7 +156,6 @@ async function submitReport(event) {
     dialog.close();
     notice("Report submitted. Recheck requested.");
     void refreshResources();
-    void refreshMetrics();
   } catch (error) {
     errorMessage.textContent = error.message;
     errorMessage.hidden = false;
@@ -206,7 +174,7 @@ async function start() {
     }
     byId("sign-out").hidden = false;
     byId("dashboard").hidden = false;
-    byId("admin-panel").hidden = !accountSession.is_admin;
+    byId("admin-link").hidden = !accountSession.is_admin;
     const courses = await api("/api/courses");
     for (const entry of courses) course.add(new Option(entry.name, entry.id));
     if (!courses.length) {
@@ -216,7 +184,6 @@ async function start() {
     }
     course.disabled = byId("refresh").disabled = byId("register-fields").disabled = false;
     selectCourse();
-    void refreshMetrics();
   } catch (error) {
     byId("dashboard").hidden = false;
     byId("connection").textContent = "Dashboard unavailable";
@@ -259,40 +226,6 @@ byId("show-login").addEventListener("click", () => {
   byId("sign-in").elements.email.focus();
 });
 
-// Submit an admin action and show its result without leaving the dashboard.
-async function submitAdminAction(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const fields = Object.fromEntries(new FormData(form));
-  const isCourse = form.id === "create-course";
-  if (fields.role === "admin") delete fields.course_id;
-  const button = form.querySelector("button");
-  button.disabled = true;
-  try {
-    if (isCourse) {
-      await api("/api/admin/courses", fields);
-      byId("assign-role").elements.course_id.value = fields.id;
-      notice("Course created.");
-      form.reset();
-    } else {
-      await api("/api/admin/users/role", fields, "PUT");
-      notice("Role assigned. It takes effect on the user's next request.");
-    }
-  } catch (error) {
-    notice(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-byId("create-course").addEventListener("submit", submitAdminAction);
-byId("assign-role").addEventListener("submit", submitAdminAction);
-byId("assignment-role").addEventListener("change", (event) => {
-  const isGlobal = event.currentTarget.value === "admin";
-  const assignmentCourse = byId("assignment-course");
-  assignmentCourse.hidden = isGlobal;
-  assignmentCourse.querySelector("input").disabled = isGlobal;
-});
 byId("sign-out").addEventListener("click", async () => {
   try {
     await api("/api/auth/logout", {});
@@ -305,7 +238,6 @@ course.addEventListener("change", selectCourse);
 byId("refresh").addEventListener("click", () => {
   notice("");
   void refreshResources();
-  void refreshMetrics();
 });
 register.addEventListener("submit", registerResource);
 report.addEventListener("submit", submitReport);

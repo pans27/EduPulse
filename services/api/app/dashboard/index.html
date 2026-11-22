@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EduPulse Dashboard</title>
   <link rel="stylesheet" href="./styles.css">
+  <script src="./api.js" defer></script>
   <script src="./dashboard.js" defer></script>
 </head>
 <body>
-  <header><div class="shell"><strong>EduPulse</strong><div class="actions"><a href="/docs">API docs</a><button id="sign-out" type="button" hidden>Sign out</button></div></div></header>
+  <header><div class="shell"><strong>EduPulse</strong><div class="actions"><a href="/dashboard/admin/" id="admin-link" hidden>Administration</a><a href="/docs">API docs</a><button id="sign-out" type="button" hidden>Sign out</button></div></div></header>
   <main class="shell">
     <section id="sign-in-panel" class="panel" aria-labelledby="sign-in-title" hidden>
       <h1 id="sign-in-title">Sign in to EduPulse</h1>
@@ -40,32 +41,11 @@
       <label>Course <select id="course" disabled></select></label>
     </div>
     <p id="notice" role="status" hidden></p>
-    <section id="admin-panel" class="panel" aria-labelledby="admin-title" hidden>
-      <h2 id="admin-title">Administration</h2>
-      <form id="create-course">
-        <fieldset>
-          <legend>Create a course</legend>
-          <label>Course ID<input name="id" required maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*"></label>
-          <label>Course name<input name="name" required maxlength="120"></label>
-          <button class="primary">Create course</button>
-        </fieldset>
-      </form>
-      <form id="assign-role">
-        <fieldset>
-          <legend>Assign a role</legend>
-          <label>User email<input name="email" type="email" required maxlength="320"></label>
-          <label>Role<select name="role" id="assignment-role"><option value="staff">Course staff</option><option value="student">Student</option><option value="admin">Administrator</option></select></label>
-          <label id="assignment-course">Course ID<input name="course_id" required maxlength="100"></label>
-          <button class="primary">Assign role</button>
-        </fieldset>
-      </form>
-    </section>
-    <div class="layout">
+    <div id="course-layout" class="layout">
       <section class="panel" aria-labelledby="resources-title">
         <div class="section-heading"><h2 id="resources-title">Resources</h2><button id="refresh" type="button" disabled>Refresh</button></div>
         <p id="empty">Loading resources…</p>
         <ul id="resources"></ul>
-        <p id="metrics" class="muted"></p>
       </section>
       <section id="register-panel" class="panel" aria-labelledby="add-title" hidden>
         <h2 id="add-title">Register a resource</h2>

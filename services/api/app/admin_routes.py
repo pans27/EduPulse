@@ -43,6 +43,13 @@ async def admin_sessions(request: Request) -> async_sessionmaker[AsyncSession]:
     return request.app.state.auth.sessions
 
 
+@router.get("/courses")
+async def list_admin_courses(request: Request) -> list[Course]:
+    # Let administrators assign users to any course, including courses they do not teach.
+    await admin_sessions(request)
+    return await request.app.state.registry.list_courses()
+
+
 @router.post("/courses", status_code=201)
 async def create_course(data: CourseCreate, request: Request) -> Course:
     # Create a course and report duplicate IDs as conflicts.

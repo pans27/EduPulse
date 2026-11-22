@@ -78,3 +78,15 @@ class DatabaseRoutesTests(TestCase):
         })
         self.assertEqual(response.status_code, 403)
         self.session.scalar.assert_not_called()
+
+    def test_admin_can_open_administration_and_list_unassigned_courses(self):
+        # Restrict Administration to admins and list courses outside their memberships.
+        self.assertEqual(self.client.get("/dashboard/admin/").status_code, 403)
+        self.assertEqual(self.client.get("/api/admin/courses").status_code, 403)
+        self.account.return_value = Principal(courses={}, is_admin=True)
+        self.session.scalars.return_value = [CourseRow(id="unassigned", name="Unassigned Course")]
+        self.assertIn("Assign user to a course", self.client.get("/dashboard/admin/").text)
+        self.assertEqual(self.client.get("/api/admin/courses").json(), [
+            {"id": "unassigned", "name": "Unassigned Course"},
+        ])
+        self.assertEqual(self.client.get("/api/courses").json(), [])

@@ -58,7 +58,7 @@ To stop the stack and keep its database volume, use the same Compose options wit
 
 Local and deployed APIs require PostgreSQL-backed accounts. Login issues a random session cookie and stores its hash in PostgreSQL. Sessions expire after one hour, and logout revokes the session across API replicas. Staff can register resources in their assigned courses. Staff and students can view course resources, receive WebSocket updates, and submit reports. Global metrics require an admin account.
 
-The auth migration seeds `admin@edupulse.example.com` with the demo password when `EDUPULSE_SEED_DEMO_ADMIN=1` is set. Users can register with an email address on the dashboard. The administrator can create courses and grant roles by email in the **Administration** panel. Admin is global, and staff and student roles need a course ID.
+The auth migration seeds `admin@edupulse.example.com` with the demo password when `EDUPULSE_SEED_DEMO_ADMIN=1` is set. Users can register with an email address on the dashboard. Administrators can open the separate [Administration page](http://127.0.0.1:8082/dashboard/admin/) to create courses and assign users by email. Select a course for staff or students. The administrator role applies across EduPulse.
 
 ### Bootstrap the production administrator
 
@@ -76,7 +76,7 @@ docker exec -it <api-container-id> /usr/local/bin/db-env.sh \
   python -m app.provision_user admin@example.com --admin
 ```
 
-The cloud stack leaves demo seeding disabled. The entrypoint reads the database credentials from the mounted Swarm secret, and the CLI prompts for a unique production password and stores its Argon2 hash. Bootstrap this account before allowing public registration. Rerunning the CLI preserves existing credentials and privileges. Sign in with the admin email to create courses and assign roles in the **Administration** panel.
+The cloud stack leaves demo seeding disabled. The entrypoint reads the database credentials from the mounted Swarm secret, and the CLI prompts for a unique production password and stores its Argon2 hash. Bootstrap this account before allowing public registration. Rerunning the CLI preserves existing credentials and privileges. Sign in with the admin email to create courses and assign roles on the **Administration** page.
 
 Course updates use `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` with a plain-text resource UUID. The API refreshes WebSocket snapshots from committed PostgreSQL rows. The worker currently checks database connectivity while the monitoring implementation is pending.
 

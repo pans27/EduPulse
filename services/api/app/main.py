@@ -5,15 +5,15 @@ import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import literal, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from .admin_routes import router as admin_router
+from .admin_routes import admin_sessions, router as admin_router
 from .auth import Auth, router as auth_router
 from .postgres_notifications import PostgresNotifications
 from .postgres_registry import PostgresRegistry
@@ -57,6 +57,20 @@ app.include_router(rest_router)
 app.include_router(websocket_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+
+
+@app.get("/dashboard/admin/", include_in_schema=False)
+async def admin_page(request: Request) -> Response:
+    # Serve the administration page only to a signed-in administrator.
+    try:
+        await admin_sessions(request)
+    except HTTPException as error:
+        if error.status_code == 401:
+            return RedirectResponse("/dashboard/", status_code=303)
+        raise
+    return FileResponse(Path(__file__).parent / "admin.html", headers={"Cache-Control": "no-store"})
+
+
 app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent / "dashboard", html=True))
 
 
