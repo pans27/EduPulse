@@ -47,6 +47,8 @@ To stop the stack and keep its database volume, use the same Compose options wit
 
 | Endpoint | Behavior |
 |---|---|
+| `GET /live` | Confirms FastAPI is running. Used by the API container healthcheck. |
+| `GET /health` | Checks PostgreSQL connectivity and returns 503 if it is unavailable. |
 | `POST /api/courses/{course_id}/resources` | Registers an HTTP(S) resource with a name, check interval in seconds, and optional timezone-aware release time. |
 | `GET /api/courses/{course_id}/resources` | Lists resources and their current state. A new resource has a null state pending its first result. |
 | `GET /api/courses/{course_id}/resources/{resource_id}` | Reads a single resource within its course. |

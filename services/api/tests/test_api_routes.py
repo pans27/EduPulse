@@ -41,6 +41,14 @@ class DatabaseRoutesTests(TestCase):
         ]
         self.assertEqual(self.client.get("/api/courses").json(), [{"id": "ece1779", "name": "ECE1779"}])
 
+    def test_liveness_stays_healthy_during_database_outage(self):
+        # Keep container liveness independent of the database health probe.
+        with patch.object(self.engine, "connect", new=MagicMock(side_effect=OSError)) as connect:
+            self.assertEqual(self.client.get("/live").status_code, 200)
+            connect.assert_not_called()
+            self.assertEqual(self.client.get("/health").status_code, 503)
+            connect.assert_called_once()
+
     def test_missing_schema_returns_service_unavailable(self):
         # Tell local operators to migrate an empty database.
         self.session.scalars.side_effect = ProgrammingError(None, None, asyncpg.UndefinedTableError())

@@ -82,6 +82,12 @@ async def schema_unavailable(_request: Request, error: DBAPIError) -> JSONRespon
     return JSONResponse(status_code=503, content={"detail": "Apply the EduPulse database migrations"})
 
 
+@app.get("/live")
+async def live() -> dict[str, str]:
+    # Confirm the API can serve requests without checking external dependencies.
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health(response: Response) -> dict[str, str]:
     # Report API health and check PostgreSQL connectivity.
