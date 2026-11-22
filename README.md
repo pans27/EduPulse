@@ -4,44 +4,46 @@ ECE1779 final project: course resource monitoring. See [docs/proposal.md](docs/p
 
 ## Local quickstart
 
-Requires Docker Desktop. From the repository root, run this command in Bash or PowerShell.
+Requires Docker Desktop.
 
-```sh
-docker compose --env-file .env.example up -d --build --wait
+Create or update the ignored `docker-compose.local.yml` with these settings. Keep your existing project name if you already have a local database volume.
+
+```yaml
+name: edupulse-pg-preview
+services:
+  postgres:
+    ports: !reset []
+  migrate:
+    environment:
+      EDUPULSE_SEED_DEMO_ADMIN: "1"
+  api:
+    ports: !reset []
+    environment:
+      EDUPULSE_AUTH_INSECURE_COOKIE: "1"
+      EDUPULSE_RESOURCE_NOTIFY_CHANNEL: resource_updates
+  nginx:
+    ports: !override
+      - "127.0.0.1:8082:80"
+  fake-site:
+    ports: !override
+      - "127.0.0.1:8001:8000"
 ```
 
-| Service | URL | Notes |
-|---|---|---|
-| Dashboard | http://127.0.0.1/dashboard/ | Served through Nginx with WebSocket upgrades |
-| API | http://127.0.0.1/docs | Swagger UI through Nginx |
-| Fake course site | http://127.0.0.1:8001/r/lecture5 | Switch modes with `PUT /admin/resources/{name}` and header `x-admin-token` |
-
-If you have an ignored `docker-compose.local.yml` override, use the command below and open the dashboard on the Nginx port configured in that file.
+Start the stack from Bash or PowerShell. Compose applies the PostgreSQL migrations before starting the API.
 
 ```sh
 docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.local.yml up -d --build --wait
 ```
 
+| Service | URL |
+|---|---|
+| Dashboard | http://127.0.0.1:8082/dashboard/ |
+| Swagger UI | http://127.0.0.1:8082/docs |
+| Fake course site | http://127.0.0.1:8001/r/lecture5 |
+
 To stop the stack and keep its database volume, use the same Compose options with `down`.
 
-## API development preview
-
-Run the API with Python 3.12 from the repository root. Use one process on loopback. Preview data is reset on restart, and all preview routes are open to the local client.
-
-```powershell
-python -m pip install -r services/api/requirements.txt
-$env:EDUPULSE_LOCAL_API = "1"
-python -m uvicorn app.main:app --app-dir services/api --host 127.0.0.1
-```
-
-Open the [dashboard](http://127.0.0.1:8000/dashboard/) to browse courses, register resources, and report issues. Use [Swagger UI](http://127.0.0.1:8000/docs) to call the REST endpoints directly.
-
-To run the same dashboard and API preview in Docker, use the commands below from the repository root and open the [Docker dashboard](http://127.0.0.1:8000/dashboard/).
-
-```powershell
-docker build -t edupulse-dashboard ./services/api
-docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_LOCAL_API=1 edupulse-dashboard
-```
+## API endpoints
 
 | Endpoint | Behavior |
 |---|---|
@@ -50,21 +52,39 @@ docker run --rm -d --name edupulse-dashboard -p 127.0.0.1:8000:8000 -e EDUPULSE_
 | `GET /api/courses/{course_id}/resources/{resource_id}` | Reads a single resource within its course. |
 | `POST /api/courses/{course_id}/resources/{resource_id}/reports` | Records a description and makes the resource immediately due. |
 | `WS /api/courses/{course_id}/ws` | Sends a `course.snapshot` on connect and when a resource is registered or reported. Reconnecting reads the current snapshot. |
-| `GET /api/metrics` | Returns counts of registered resources and student reports in the preview. |
+| `GET /api/metrics` | Returns counts of registered resources and student reports in PostgreSQL. |
 
-## PostgreSQL-backed Docker preview
+## Database authentication
 
-The local override enables unauthenticated writes for development and binds Nginx and the fake site to loopback.
+Local and deployed APIs require PostgreSQL-backed accounts. Login issues a random session cookie and stores its hash in PostgreSQL. Sessions expire after one hour, and logout revokes the session across API replicas. Staff can register resources in their assigned courses. Staff and students can view course resources, receive WebSocket updates, and submit reports. Global metrics require an admin account.
 
-Fresh databases require the Compose migration service introduced by [PR #10](https://github.com/pans27/EduPulse/pull/10). With that change, Compose runs Alembic before starting the API. The dashboard lists courses once they are provisioned.
+The auth migration seeds `admin@edupulse.example.com` with the demo password when `EDUPULSE_SEED_DEMO_ADMIN=1` is set. Users can register with an email address on the dashboard. The administrator can create courses and grant roles by email in the **Administration** panel. Admin is global, and staff and student roles need a course ID.
 
-Registrations and reports persist in PostgreSQL through SQLAlchemy's async ORM. The API image includes mappings for the existing migration and uses asyncpg for its dedicated notification connection. Alembic remains responsible for schema changes. The worker currently checks database connectivity, so resources await their first check until the monitoring worker is integrated.
+### Bootstrap the production administrator
 
-In database mode, set `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` to the channel agreed with the worker. Local Compose uses `resource_updates` with a plain-text resource UUID. Each API replica listens on a dedicated connection and refreshes affected WebSocket snapshots from committed PostgreSQL rows. It also refreshes snapshots after reconnecting to PostgreSQL. Leave `EDUPULSE_DATABASE_WRITES` disabled outside local development until course authorization is implemented.
+After the Swarm database migration succeeds, find a running API replica from the manager:
+
+```sh
+docker service ps edupulse_api --filter desired-state=running
+```
+
+SSH into the node running that replica, find the container ID, and replace the example email with the administrator's email.
+
+```sh
+docker ps --filter label=com.docker.swarm.service.name=edupulse_api
+docker exec -it <api-container-id> /usr/local/bin/db-env.sh \
+  python -m app.provision_user admin@example.com --admin
+```
+
+The cloud stack leaves demo seeding disabled. The entrypoint reads the database credentials from the mounted Swarm secret, and the CLI prompts for a unique production password and stores its Argon2 hash. Bootstrap this account before allowing public registration. Rerunning the CLI preserves existing credentials and privileges. Sign in with the admin email to create courses and assign roles in the **Administration** panel.
+
+Course updates use `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` with a plain-text resource UUID. The API refreshes WebSocket snapshots from committed PostgreSQL rows. The worker currently checks database connectivity while the monitoring implementation is pending.
+
+Use HTTPS for secure session cookies on Swarm. The local override allows cookies on loopback HTTP.
 
 ## API tests
 
-Run from the repository root with Python 3.12. The tests use the in-memory preview and a mocked ORM session.
+Run from the repository root with Python 3.12. The tests use mocked PostgreSQL sessions.
 
 ```powershell
 python -m pip install -r services/api/requirements-test.txt

@@ -5,15 +5,19 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
+    false,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -229,3 +233,35 @@ class StudentReport(Base):
             "created_at",
         ),
     )
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    email: Mapped[str] = mapped_column(String(320))
+    password_hash: Mapped[str] = mapped_column(Text)
+    is_admin: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=true())
+
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+
+
+class CourseMember(Base):
+    __tablename__ = "course_members"
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(7))
+
+    __table_args__ = (
+        CheckConstraint("role IN ('staff', 'student')", name="ck_course_members_role"),
+        Index("ix_course_members_course_id", "course_id"),
+    )
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

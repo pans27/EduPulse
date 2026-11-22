@@ -4,6 +4,7 @@
   background: #f4f6f9;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; }
 .shell { width: min(1080px, calc(100% - 2rem)); margin-inline: auto; }
 header { background: #fff; border-bottom: 1px solid #dce2e9; }

@@ -1,9 +1,9 @@
-"""API mappings for the tables created by Alembic revision 06128b7a2e2d."""
+"""API mappings for PostgreSQL tables managed by Alembic."""
 
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, Text, false, func, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -38,3 +38,29 @@ class StudentReportRow(RegistryBase):
     resource_id: Mapped[UUID] = mapped_column(ForeignKey("resources.id"))
     description: Mapped[str] = mapped_column(String(2000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserRow(RegistryBase):
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    email: Mapped[str] = mapped_column(String(320))
+    password_hash: Mapped[str] = mapped_column(Text)
+    is_admin: Mapped[bool] = mapped_column(server_default=false())
+    is_active: Mapped[bool] = mapped_column(server_default=true())
+
+
+class CourseMemberRow(RegistryBase):
+    __tablename__ = "course_members"
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(7))
+
+
+class SessionRow(RegistryBase):
+    __tablename__ = "sessions"
+
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
