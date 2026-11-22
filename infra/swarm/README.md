@@ -117,10 +117,29 @@ openssl rand -hex 24 | tr -d '\n' | docker secret create pg_password -
 openssl rand -hex 24 | tr -d '\n' | docker secret create fake_admin_token -
 ```
 
-Then, from a checkout of the repo on the manager (images must already be in the registry):
+Build and push the images from a laptop. The Droplets are amd64, so on an Apple Silicon Mac the platform flag is required. The registry is `registry.digitalocean.com/edupulse` (Basic plan, nyc3; DigitalOcean has no registry region in Toronto).
 
 ```bash
-REGISTRY=registry.digitalocean.com/<registry> TAG=<git-sha> \
+doctl registry login
+R=registry.digitalocean.com/edupulse TAG=$(git rev-parse --short HEAD)
+docker buildx build --platform linux/amd64 --provenance=false -t $R/api:$TAG --push services/api
+docker buildx build --platform linux/amd64 --provenance=false -t $R/worker:$TAG --push services/worker
+docker buildx build --platform linux/amd64 --provenance=false -t $R/fake-site:$TAG --push services/fake-site
+docker buildx build --platform linux/amd64 --provenance=false -t $R/migrate:$TAG --push -f db/Dockerfile .
+```
+
+Give the manager read-only pull access (valid 30 days; repeat this before then), and copy the stack files:
+
+```bash
+doctl registry docker-config --expiry-seconds 2592000 | ssh root@<manager-ip> 'mkdir -p ~/.docker && umask 077 && cat > ~/.docker/config.json'
+git archive HEAD infra | ssh root@<manager-ip> 'mkdir -p /opt/edupulse && tar -x -C /opt/edupulse'
+```
+
+Then on the manager. `--with-registry-auth` forwards the manager's credentials to the workers, so they need no login of their own:
+
+```bash
+cd /opt/edupulse
+REGISTRY=registry.digitalocean.com/edupulse TAG=<git-sha> \
   docker stack deploy --with-registry-auth -c infra/swarm/stack.yml edupulse
 docker stack services edupulse
 ```
@@ -148,6 +167,20 @@ A first version capped API replicas at 2 per node; the start-first update then h
 | Fresh deploy | Job failed twice (`could not translate host name "postgres"`) while Postgres started, then completed; `alembic_version` = head, 5 tables |
 | `/health` through Nginx after the job | 200, database ok |
 | Same-spec redeploy and `--force` | Job re-ran and completed; no `Running upgrade` (no-op at head) |
+
+### Deployed on DigitalOcean (2026-11-21, images from `6a904b3`)
+
+| Check | Result |
+|---|---|
+| Swarm | 3 nodes `Ready`, private addresses 10.118.0.2–4, labels as above |
+| Smoke test | One replica per node, 6/6 requests through the routing mesh returned 200, overlay reachable across nodes |
+| Placement | Postgres, migrate and Nginx on the manager; API 2 + 1 and workers 1 + 1 across node-1 and node-2; fake site on node-2 |
+| Migrate job | Failed twice while Postgres started, then `Complete`; `alembic_version` = head |
+| `http://<manager-ip>/health` | 200, database ok; `/` redirects to `/dashboard/`; gzip on |
+| Ports 8000, 8001, 5432, 2377, 8080 from the internet | Blocked by the cloud firewall |
+| WebSocket: 6 clients over the public IP, spread 2 per API replica; one `UPDATE` + `pg_notify('resource_updates', id)` | All 6 received the pushed `DOWN` state, so updates reach clients on every replica; all still open after 70 s idle |
+
+`cloud-init.yaml` must stay ASCII-only. A `→` in a comment reached the Droplets as an invalid control character, and cloud-init silently skipped the whole file (its status still said `done`), so check for `/var/log/edupulse-bootstrap.done` rather than trusting the status.
 
 ## Teardown
 
