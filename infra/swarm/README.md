@@ -103,32 +103,12 @@ Expected: `docker node ls` shows 3 nodes `Ready`/`Active`; the three replicas la
 | Feature | How |
 |---|---|
 | Passwords stay out of the stack file | `pg_password` and `fake_admin_token` are Docker secrets, mounted at `/run/secrets/`. Postgres reads `POSTGRES_PASSWORD_FILE`; API and worker get `DATABASE_URL` from the [`db-env.sh`](db-env.sh) entrypoint shim |
-| Persistent data | Postgres binds a directory on the DigitalOcean Volume (see below), pinned to the manager, with a 60 s stop grace period so it can shut down cleanly |
 | Placement | Postgres on `db=true`, fake site on `fakesite=true`, API and workers on `app=true`, Nginx on the manager |
 | Schema migrations | `migrate` is a `replicated-job`: it runs `alembic upgrade head` to completion on every `stack deploy` and retries (up to 10 times, 5 s apart) while Postgres is still starting. Swarm has no `depends_on`, so the API answers 503 until the tables exist. Re-running is a no-op at head |
 | Zero-downtime API updates | `parallelism: 1`, `order: start-first`, automatic rollback on failure |
 | Self-healing | Swarm restarts failed tasks; the image healthchecks mark unhealthy replicas |
 | Real client IPs | Nginx publishes port 80 in host mode (not the routing mesh); uvicorn runs with `--proxy-headers` |
 | Config files across nodes | `nginx/default.conf` and `db-env.sh` ship as Swarm configs, not bind mounts. To change one, bump `NGINX_CONF_VERSION` / `DB_ENV_VERSION` and redeploy |
-
-### PostgreSQL Volume
-
-Postgres keeps its data on a 10 GB DigitalOcean Volume attached to the manager, so the data outlives the containers, the stack and the Droplet's own disk. Create and attach it once, from a laptop:
-
-```bash
-doctl compute volume create edupulse-pgdata --region tor1 --size 10GiB --fs-type ext4 --fs-label pgdata --tag edupulse
-doctl compute volume-action attach <volume-id> <manager-droplet-id> --wait
-```
-
-Ubuntu mounts it automatically at `/mnt/edupulse_pgdata` through a systemd unit (`mnt-edupulse_pgdata.mount`, with `nofail`), and remounts it on boot. Then, on the manager:
-
-```bash
-mkdir /mnt/edupulse_pgdata/postgres
-```
-
-The stack binds `/mnt/edupulse_pgdata/postgres`, not the mount point itself. That subdirectory exists only on the Volume, so if the Volume is ever missing, Swarm rejects the Postgres task (`bind source path does not exist`) instead of starting an empty database on the Droplet's disk. To bring it back, use `systemctl start mnt-edupulse_pgdata.mount` (there is no fstab entry, so `mount` alone fails).
-
-To move an existing database onto the Volume: `docker service scale edupulse_postgres=0`, then `cp -a` the old data directory into `/mnt/edupulse_pgdata/postgres/`, then redeploy.
 
 On the manager, once:
 
@@ -202,23 +182,10 @@ A first version capped API replicas at 2 per node; the start-first update then h
 
 `cloud-init.yaml` must stay ASCII-only. A `→` in a comment reached the Droplets as an invalid control character, and cloud-init silently skipped the whole file (its status still said `done`), so check for `/var/log/edupulse-bootstrap.done` rather than trusting the status.
 
-### Persistence rehearsal (DigitalOcean, 2026-11-22)
-
-The existing database was moved onto the Volume first; its `system_identifier` was unchanged, so it is the same cluster. A marker row in `student_reports` was checked after each step:
-
-| Scenario | Data | Recovery |
-|---|---|---|
-| `docker service update --force edupulse_postgres` (new container) | Marker present | Automatic |
-| `docker stack rm edupulse`, then `stack deploy` (every container and network removed) | Marker present; migrate job a no-op | Automatic |
-| Reboot the manager Droplet (Postgres, Nginx and the Swarm leader all go down) | Both markers present; Volume remounted on boot | Public `/health` OK after 52 s; API back to 3/3 about 30 s later |
-| Volume unmounted, then Postgres started | Task rejected; nothing written to the Droplet's disk | After `systemctl start mnt-edupulse_pgdata.mount`, healthy with both markers |
-
-While the database is down, the API's `/health` returns 503, so Swarm restarts every API replica. They come back once Postgres is healthy.
-
 ## Teardown
 
 ```bash
 docker swarm leave --force   # on each node, workers first
 ```
 
-Then destroy the Droplets in the console. **Do not** destroy the Volume unless the data is no longer needed: detach it, and it can be attached to a new manager (create `/mnt/edupulse_pgdata` there and label that node `db=true`).
+Then destroy the Droplets in the console. **Do not** destroy the Volume unless the data is no longer needed.
