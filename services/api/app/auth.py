@@ -19,7 +19,7 @@ from starlette.requests import HTTPConnection
 from .registry_models import CourseMemberRow, SessionRow, UserRow
 
 COOKIE = "edupulse_session"
-SESSION_SECONDS = 3600
+SESSION_SECONDS = 8 * 60 * 60
 TOKEN_BYTES = 32
 TOKEN_LENGTH = 43
 router = APIRouter(prefix="/api/auth")

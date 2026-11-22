@@ -41,7 +41,7 @@ class DatabaseAuthTests(TestCase):
         self.assertEqual(self.client.post(url, json={"email": "student@example.com", "password": "wrong"}).status_code, 401)
         response = self.client.post(url, json={"email": "Student@EXAMPLE.COM", "password": "example-test-password"})
         self.assertEqual(response.status_code, 204, response.text)
-        for flag in ("Secure", "HttpOnly", "SameSite=strict"):
+        for flag in ("Secure", "HttpOnly", "SameSite=strict", "Max-Age=28800"):
             self.assertIn(flag, response.headers["set-cookie"])
         token = self.client.cookies[COOKIE]
         persisted_session = self.write_session.add.call_args.args[0]
