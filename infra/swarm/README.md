@@ -108,8 +108,9 @@ Expected: `docker node ls` shows 3 nodes `Ready`/`Active`; the three replicas la
 | Schema migrations | `migrate` is a `replicated-job`: it runs `alembic upgrade head` to completion on every `stack deploy` and retries (up to 10 times, 5 s apart) while Postgres is still starting. Swarm has no `depends_on`, so the API answers 503 until the tables exist. Re-running is a no-op at head |
 | Zero-downtime API updates | `parallelism: 1`, `order: start-first`, automatic rollback on failure |
 | Self-healing | Swarm restarts failed tasks; the image healthchecks mark unhealthy replicas |
-| Real client IPs | Nginx publishes port 80 in host mode (not the routing mesh); uvicorn runs with `--proxy-headers` |
-| Config files across nodes | `nginx/default.conf` and `db-env.sh` ship as Swarm configs, not bind mounts. To change one, bump `NGINX_CONF_VERSION` / `DB_ENV_VERSION` and redeploy |
+| HTTPS | Let's Encrypt certificate from certbot on the manager, bind-mounted into Nginx; HTTP redirects to HTTPS (see below) |
+| Real client IPs | Nginx publishes ports 80 and 443 in host mode (not the routing mesh); uvicorn runs with `--proxy-headers` |
+| Config files across nodes | `nginx/https.conf`, `nginx/edupulse.inc` and `db-env.sh` ship as Swarm configs, not bind mounts. To change one, bump `NGINX_CONF_VERSION` / `DB_ENV_VERSION` and redeploy |
 
 ### PostgreSQL Volume
 
@@ -214,6 +215,65 @@ The existing database was moved onto the Volume first; its `system_identifier` w
 | Volume unmounted, then Postgres started | Task rejected; nothing written to the Droplet's disk | After `systemctl start mnt-edupulse_pgdata.mount`, healthy with both markers |
 
 While the database is down, the API's `/health` returns 503, so Swarm restarts every API replica. They come back once Postgres is healthy.
+
+## 7. HTTPS
+
+Live at **https://138-197-173-188.sslip.io**. sslip.io is a free DNS service that resolves `138-197-173-188.sslip.io` to `138.197.173.188`, so Let's Encrypt can issue a real certificate without us buying a domain. A purchased domain can replace it later: point an A record at the manager and issue a new certificate with the same `--cert-name`.
+
+The Nginx configuration is split so local Compose stays plain HTTP:
+
+| File | Used by |
+|---|---|
+| `infra/nginx/edupulse.inc` | Both: proxy settings, WebSocket and API locations |
+| `infra/nginx/default.conf` | Local Compose, and the Swarm stack while bootstrapping: HTTP on port 80 |
+| `infra/nginx/https.conf` | Swarm (default): port 80 serves only ACME challenges and `/nginx-health` and redirects the rest; port 443 has TLS 1.2/1.3 and HTTP/2 |
+
+Nginx can't start `https.conf` before a certificate exists, so the first certificate is bootstrapped over HTTP, once, on the manager:
+
+```bash
+apt-get install -y certbot
+mkdir -p /var/www/certbot /etc/letsencrypt
+cd /opt/edupulse
+NGINX_CONF_FILE=default.conf REGISTRY=... TAG=... docker stack deploy --with-registry-auth -c infra/swarm/stack.yml edupulse
+certbot certonly --webroot -w /var/www/certbot -d 138-197-173-188.sslip.io --cert-name edupulse \
+  --agree-tos --register-unsafely-without-email
+REGISTRY=... TAG=... docker stack deploy --with-registry-auth -c infra/swarm/stack.yml edupulse   # back to https.conf
+```
+
+Renewal is automatic. Ubuntu's `certbot.timer` runs `certbot renew` twice a day, and renews through the same webroot that `https.conf` serves on port 80. The deploy hook `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` then sends Nginx a `SIGHUP`, so it loads the new certificate without dropping connections:
+
+```sh
+#!/bin/sh
+for c in $(docker ps -q -f name=edupulse_nginx); do docker kill -s HUP "$c" >/dev/null; done
+```
+
+### HTTPS checks (2026-11-22)
+
+| Check | Result |
+|---|---|
+| Certificate | `CN=138-197-173-188.sslip.io`, issued by Let's Encrypt, valid until 2027-02-20 |
+| `http://…/dashboard/` | 301 to `https://…/dashboard/` |
+| `https://…/health` | 200, database ok, over HTTP/2; gzip on |
+| `wss://…/api/courses/ece1779/ws` | Snapshot received |
+| TLS 1.1 | Refused |
+| `certbot renew --dry-run` | Success through the webroot |
+| Container healthcheck (`http://127.0.0.1/nginx-health`) | Still served on port 80, no redirect |
+
+## 8. Monitoring
+
+DigitalOcean's metrics agent runs on all three Droplets (Monitoring enabled at creation). Alerts go to the account email; add teammates under each policy's recipients.
+
+| Alert | Applies to | Condition |
+|---|---|---|
+| CPU | tag `edupulse` | Above 80% for 5 min |
+| Memory | tag `edupulse` | Above 85% for 5 min |
+| Disk | tag `edupulse` | Above 80% for 5 min |
+| Load | tag `edupulse` | 1-minute load above 2 for 10 min (the nodes have 1 vCPU) |
+| Uptime: down | `https://138-197-173-188.sslip.io/health` from us_east, us_west, eu_west | Down for 2 min. `/health` also checks PostgreSQL, so a database outage counts as down |
+| Uptime: latency | same check | Above 1 s for 5 min |
+| Uptime: certificate | same check | Expires within 14 days, i.e. renewal has stopped working |
+
+Create the policies with `doctl monitoring alert create --tags edupulse ...` and the check with `doctl monitoring uptime create` / `uptime alert create`; `doctl monitoring alert list` shows what's configured. Application metrics (checks per minute, failure rate, open incidents, queue lag) come from the API's `/api/metrics` and are separate.
 
 ## Teardown
 
