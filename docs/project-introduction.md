@@ -1,0 +1,3 @@
+# EduPulse
+
+We would like to introduce EduPulse, a platform that helps students and course staff to find out when online course materials are unavailable or missed their scheduled release. Instructors and teaching assistants can register resources such as course websites, lecture recordings, and assignment links, and EduPulse checks their availability automatically. Students can view the latest status on a live course dashboard and report an issue to request an immediate recheck. EduPulse runs containerized FastAPI and background worker services on DigitalOcean using Docker Swarm, with PostgreSQL on persistent storage and WebSockets for live dashboard updates.
