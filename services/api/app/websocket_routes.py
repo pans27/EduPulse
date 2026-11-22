@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, WebSocket
 from sqlalchemy.exc import SQLAlchemyError
 
-from .in_memory_registry import InMemoryRegistry
+from .auth import require_access
 from .postgres_registry import PostgresRegistry
 
 router = APIRouter(prefix="/api")
@@ -33,24 +33,26 @@ async def wait_for_course_update(
 @router.websocket("/courses/{course_id}/ws")
 async def course_updates(websocket: WebSocket, course_id: str) -> None:
     # Send the current course snapshot and push updates while the client is connected.
-    registry: InMemoryRegistry | PostgresRegistry | None = websocket.app.state.registry
-    if registry is None:
+    try:
+        await require_access(websocket, course_id)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    except (SQLAlchemyError, OSError, TimeoutError):
         await websocket.close(code=1013)
         return
-    preview_changed = asyncio.Event()
+    registry: PostgresRegistry = websocket.app.state.registry
+    notifications = websocket.app.state.resource_notifications
     socket_tasks: set[asyncio.Task] = set()
     accepted = False
     async with AsyncExitStack() as subscriptions:
-        wait_for_update = preview_changed.wait
-        if isinstance(registry, InMemoryRegistry) and course_id in registry.listeners:
-            listeners = registry.listeners[course_id]
-            listeners.add(preview_changed)
-            subscriptions.callback(listeners.discard, preview_changed)
-        elif isinstance(registry, PostgresRegistry) and websocket.app.state.resource_notifications:
-            notification_queue = await subscriptions.enter_async_context(websocket.app.state.resource_notifications.subscribe())
+        notification_queue = await subscriptions.enter_async_context(notifications.subscribe()) if notifications else None
 
-            async def wait_for_update():
-                # Wait for this socket's course to change in PostgreSQL.
+        async def wait_for_update():
+            # Suspend until this course receives a notification.
+            if notification_queue is None:
+                await asyncio.Future()
+            else:
                 await wait_for_course_update(notification_queue, registry, course_id)
 
         try:
@@ -71,7 +73,7 @@ async def course_updates(websocket: WebSocket, course_id: str) -> None:
                     socket_tasks.add(receive_task)
                 if refresh_task in completed_tasks:
                     refresh_task.result()
-                    preview_changed.clear()
+                    await require_access(websocket, course_id)
                     snapshot = await registry.get_snapshot(course_id)
                     await websocket.send_json(snapshot.model_dump(mode="json"))
                     socket_tasks.remove(refresh_task)

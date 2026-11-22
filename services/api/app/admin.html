@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Administration | EduPulse</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+  <script src="/dashboard/api.js" defer></script>
+  <script src="/dashboard/admin.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="shell">
+      <strong>EduPulse</strong>
+      <nav aria-label="Main navigation"><a href="/dashboard/">Dashboard</a></nav>
+    </div>
+  </header>
+  <main class="shell">
+    <h1>Administration</h1>
+    <div class="layout">
+      <section class="panel" aria-labelledby="assignment-title">
+        <h2 id="assignment-title">Assign user to a course</h2>
+        <form id="assign-role">
+          <fieldset id="assignment-fields" disabled>
+            <label>User email<input name="email" type="email" required maxlength="320"></label>
+            <label>Role
+              <select name="role" id="assignment-role">
+                <option value="student">Student</option>
+                <option value="staff">Course staff</option>
+                <option value="admin">Administrator</option>
+              </select>
+            </label>
+            <label id="assignment-course-label">Course
+              <select name="course_id" id="assignment-course" required>
+                <option value="">Loading courses…</option>
+              </select>
+            </label>
+            <button id="assign-button" type="submit" class="primary">Assign to course</button>
+          </fieldset>
+        </form>
+        <p id="assignment-notice" class="feedback" role="status" hidden></p>
+      </section>
+      <section class="panel" aria-labelledby="create-course-title">
+        <h2 id="create-course-title">Create a course</h2>
+        <form id="create-course">
+          <fieldset>
+            <label>Course ID<input name="id" required maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*"></label>
+            <label>Course name<input name="name" required maxlength="120"></label>
+            <button type="submit" class="primary">Create course</button>
+          </fieldset>
+        </form>
+        <p id="course-notice" class="feedback" role="status" hidden></p>
+      </section>
+    </div>
+    <p id="metrics" class="muted admin-metrics" hidden></p>
+  </main>
+</body>
+</html>

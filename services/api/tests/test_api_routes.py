@@ -1,109 +1,100 @@
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest import TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import Principal
 from app.main import app
 from app.registry_models import CourseRow
 
-
 RESOURCES = "/api/courses/ece1779/resources"
-COURSE_WS = "/api/courses/ece1779/ws"
 
 
-class PreviewRoutesTests(TestCase):
+class DatabaseRoutesTests(TestCase):
     def setUp(self):
-        # Start an isolated API preview with no database connection.
-        self.enterContext(patch.dict(os.environ, {"EDUPULSE_LOCAL_API": "1", "DATABASE_URL": ""}))
-        self.client = self.enterContext(TestClient(app))
-
-    def test_registration_and_report_reschedule_resource(self):
-        # Keep a future release scheduled until a student requests an immediate recheck.
-        release_at = datetime.now(UTC) + timedelta(days=1)
-        response = self.client.post(
-            RESOURCES,
-            json={
-                "name": "Lecture notes",
-                "url": "https://example.com/notes",
-                "release_at": release_at.isoformat(),
-            },
-        )
-        self.assertEqual(response.status_code, 201, response.text)
-        resource = response.json()
-        self.assertEqual(datetime.fromisoformat(resource["next_check_at"]), release_at)
-        self.assertIsNone(resource["state"])
-        self.assertEqual(self.client.get(RESOURCES).json(), [resource])
-        self.assertEqual(
-            self.client.get(f"/api/courses/demo/resources/{resource['id']}").status_code,
-            404,
-        )
-
-        resource_path = f"{RESOURCES}/{resource['id']}"
-        report = self.client.post(f"{resource_path}/reports", json={"description": "Link is broken"})
-        self.assertEqual(report.status_code, 201, report.text)
-        self.assertEqual(self.client.get(resource_path).json()["next_check_at"], report.json()["created_at"])
-        self.assertEqual(
-            self.client.get("/api/metrics").json(),
-            {"registered_resources": 1, "student_reports": 1},
-        )
-
-    def test_websocket_updates_and_reconnect(self):
-        # Send the initial snapshot, then push changes and recover them on reconnect.
-        with self.client.websocket_connect(COURSE_WS) as socket:
-            self.assertEqual(socket.receive_json()["resources"], [])
-            response = self.client.post(
-                RESOURCES,
-                json={"name": "Lecture notes", "url": "https://example.com/notes"},
-            )
-            self.assertEqual(response.status_code, 201, response.text)
-            updated = socket.receive_json()
-            self.assertEqual(updated["type"], "course.snapshot")
-            self.assertEqual(updated["resources"], [response.json()])
-        with self.client.websocket_connect(COURSE_WS) as socket:
-            self.assertEqual(socket.receive_json(), updated)
-
-    def test_health_in_preview_mode(self):
-        # Report healthy preview mode even when PostgreSQL is disabled.
-        response = self.client.get("/health")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok", "database": "disabled", "mode": "local"})
-
-
-class DefaultModeTests(TestCase):
-    def setUp(self):
-        # Run database mode against a mock ORM session with local-only options disabled.
+        # Start database mode with a mocked ORM session.
         environment = {
-            "EDUPULSE_LOCAL_API": "0",
             "DATABASE_URL": "postgresql://unused",
             "EDUPULSE_RESOURCE_NOTIFY_CHANNEL": "",
-            "EDUPULSE_DATABASE_WRITES": "0",
         }
         self.enterContext(patch.dict(os.environ, environment))
-        self.session = AsyncMock()
-        self.sessions = MagicMock()
-        self.sessions.return_value.__aenter__.return_value = self.session
-        self.enterContext(patch("app.main.create_async_engine", return_value=AsyncMock()))
-        self.enterContext(patch("app.main.async_sessionmaker", return_value=self.sessions))
+        self.session = MagicMock(spec=AsyncSession)
+        sessions = MagicMock()
+        sessions.return_value.__aenter__.return_value = self.session
+        sessions.begin.return_value.__aenter__.return_value = self.session
+        self.engine = AsyncMock()
+        self.enterContext(patch("app.main.create_async_engine", return_value=self.engine))
+        self.enterContext(patch("app.main.async_sessionmaker", return_value=sessions))
         self.client = self.enterContext(TestClient(app))
+        account = Principal(courses={"ece1779": "staff"})
+        self.account = self.enterContext(patch.object(app.state.auth, "account", return_value=account))
 
-    def test_course_routes_read_postgresql(self):
-        # Return database courses through the same API response shape as preview mode.
-        courses = [{"id": "test", "name": "Test Course"}]
-        self.session.scalars.return_value = [CourseRow(**course) for course in courses]
-        self.assertEqual(self.client.get("/api/courses").json(), courses)
-        self.session.scalars.assert_awaited_once()
+    def test_course_routes_filter_to_memberships(self):
+        # Return only courses assigned to the signed-in user.
+        self.session.scalars.return_value = [
+            CourseRow(id="ece1779", name="ECE1779"), CourseRow(id="other", name="Other")
+        ]
+        self.assertEqual(self.client.get("/api/courses").json(), [{"id": "ece1779", "name": "ECE1779"}])
+
+    def test_liveness_stays_healthy_during_database_outage(self):
+        # Keep container liveness independent of the database health probe.
+        with patch.object(self.engine, "connect", new=MagicMock(side_effect=OSError)) as connect:
+            self.assertEqual(self.client.get("/live").status_code, 200)
+            connect.assert_not_called()
+            self.assertEqual(self.client.get("/health").status_code, 503)
+            connect.assert_called_once()
 
     def test_missing_schema_returns_service_unavailable(self):
         # Tell local operators to migrate an empty database.
         self.session.scalars.side_effect = ProgrammingError(None, None, asyncpg.UndefinedTableError())
         self.assertEqual(self.client.get("/api/courses").status_code, 503)
 
-    def test_database_mutations_require_opt_in(self):
-        # Reject unauthenticated writes in database mode by default.
+    def test_postgresql_duplicate_url_returns_conflict(self):
+        # Exercise the driver exception chain returned by a duplicate insert.
+        driver_error = asyncpg.UniqueViolationError()
+        driver_error.constraint_name = "uq_resources_course_url"
+        adapter_error = Exception("unique violation")
+        adapter_error.__cause__ = driver_error
+        self.session.get.return_value = CourseRow(id="ece1779", name="Test Course")
+        self.session.execute.return_value = MagicMock(scalar_one=lambda: datetime.now(UTC))
+        self.session.flush.side_effect = IntegrityError(None, None, adapter_error)
         response = self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"})
+        self.assertEqual(response.status_code, 409)
+
+    def test_anonymous_reads_and_writes_are_rejected(self):
+        # Never serve course data or process writes without an authenticated account.
+        self.account.return_value = None
+        self.assertEqual(self.client.get("/api/courses").status_code, 401)
+        self.assertEqual(self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"}).status_code, 401)
+        self.session.scalars.assert_not_called()
+
+    def test_student_cannot_register_resources(self):
+        # Restrict course registration to staff even with a valid student session.
+        self.account.return_value = Principal(courses={"ece1779": "student"})
+        self.assertEqual(self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"}).status_code, 403)
+        self.session.add.assert_not_called()
+
+    def test_staff_cannot_grant_admin(self):
+        # Course staff cannot grant global roles.
+        response = self.client.put("/api/admin/users/role", json={
+            "email": "student@example.com", "role": "admin",
+        })
         self.assertEqual(response.status_code, 403)
-        self.sessions.begin.assert_not_called()
+        self.session.scalar.assert_not_called()
+
+    def test_admin_can_open_administration_and_list_unassigned_courses(self):
+        # Restrict Administration to admins and list courses outside their memberships.
+        self.assertEqual(self.client.get("/dashboard/admin/").status_code, 403)
+        self.assertEqual(self.client.get("/api/admin/courses").status_code, 403)
+        self.account.return_value = Principal(courses={}, is_admin=True)
+        self.session.scalars.return_value = [CourseRow(id="unassigned", name="Unassigned Course")]
+        self.assertIn("Assign user to a course", self.client.get("/dashboard/admin/").text)
+        self.assertEqual(self.client.get("/api/admin/courses").json(), [
+            {"id": "unassigned", "name": "Unassigned Course"},
+        ])
+        self.assertEqual(self.client.get("/api/courses").json(), [])

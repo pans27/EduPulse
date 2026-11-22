@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, StudentReport
@@ -12,12 +13,11 @@ from .registry_models import CourseRow, ResourceRow, StudentReportRow
 
 class PostgresRegistry:
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], notify_channel: str | None, allow_writes: bool
+        self, sessions: async_sessionmaker[AsyncSession], notify_channel: str | None
     ) -> None:
-        # Keep the session factory and local-development write configuration.
+        # Keep the session factory and notification channel.
         self.sessions = sessions
         self.notify_channel = notify_channel
-        self.allow_writes = allow_writes
 
     async def list_courses(self) -> list[Course]:
         # Read the provisioned course catalog.
@@ -63,7 +63,6 @@ class PostgresRegistry:
 
     async def register(self, course_id: str, resource_input: ResourceCreate) -> Resource:
         # Insert a resource and notify listeners when the transaction commits.
-        self._require_writes()
         async with self.sessions.begin() as session:
             course = await session.get(CourseRow, course_id, with_for_update={"read": True, "key_share": True})
             if course is None:
@@ -78,13 +77,19 @@ class PostgresRegistry:
                 next_check_at=max(now, resource_input.release_at or now),
             )
             session.add(resource)
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError as error:
+                # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
+                database_error = error.orig.__cause__
+                if getattr(database_error, "constraint_name", None) == "uq_resources_course_url":
+                    raise HTTPException(409, "This URL is already registered for this course") from error
+                raise
             await self._notify(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
 
     async def report(self, course_id: str, resource_id: UUID, report_input: ReportCreate) -> StudentReport:
         # Persist the report and make the resource due in the same transaction.
-        self._require_writes()
         async with self.sessions.begin() as session:
             updated_resource_id = await session.scalar(
                 update(ResourceRow)
@@ -110,11 +115,6 @@ class PostgresRegistry:
                 )
             )
             return dict(counts.mappings().one())
-
-    def _require_writes(self) -> None:
-        # Gate unauthenticated database mutations behind explicit local opt-in.
-        if not self.allow_writes:
-            raise HTTPException(403, "Database writes are disabled")
 
     async def _notify(self, session: AsyncSession, resource_id: UUID) -> None:
         # Send the resource ID through PostgreSQL in the same transaction as the write.
