@@ -18,6 +18,7 @@ import asyncpg
 import httpx
 
 from . import logs
+from .leases import work_deadline
 from .message import MAX_ATTEMPTS, is_permanent, render, retry_delay
 from .outbox import OUTBOX_CHANNEL
 
@@ -31,6 +32,8 @@ POLL_SECONDS = float(os.environ.get("DISPATCH_POLL_SECONDS", "5"))
 # row is marked sent. Unset in normal runs.
 CRASH_AFTER_SEND = int(os.environ.get("DISPATCH_CRASH_AFTER_SEND", "0"))
 INSTANCE = os.environ.get("DISPATCH_ID") or f"{socket.gethostname()}:{os.getpid()}"
+# Each send is bounded so it ends 10 s before the lease does (rejects a lease shorter than 15 s).
+SEND_TIMEOUT_SECONDS = min(10, work_deadline(LEASE_SECONDS, name="DISPATCH_LEASE_SECONDS"))
 
 log = logs.setup("dispatcher", INSTANCE)
 
@@ -109,7 +112,7 @@ async def run(stop: asyncio.Event) -> None:
         with open(MAIL_TOKEN_FILE) as f:
             headers["Authorization"] = f"Bearer {f.read().strip()}"
     log.info("started", extra={"fields": {"endpoint": MAIL_ENDPOINT, "batch": BATCH}})
-    async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=SEND_TIMEOUT_SECONDS, headers=headers) as client:
         dispatcher = Dispatcher(pool, client)
         try:
             while not stop.is_set():

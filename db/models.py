@@ -70,6 +70,10 @@ class Resource(Base):
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    # Set by a student report, cleared by the worker's claim; see migration d6bf51ade62b.
+    recheck_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
     # Worker leasing
     lease_owner: Mapped[str | None] = mapped_column(

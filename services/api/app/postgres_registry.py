@@ -94,7 +94,9 @@ class PostgresRegistry:
             updated_resource_id = await session.scalar(
                 update(ResourceRow)
                 .where(ResourceRow.course_id == course_id, ResourceRow.id == resource_id)
-                .values(next_check_at=func.least(ResourceRow.next_check_at, func.now()))
+                # recheck_requested makes the worker check again even if a check is already
+                # running: that check's result would otherwise push next_check_at back out.
+                .values(next_check_at=func.least(ResourceRow.next_check_at, func.now()), recheck_requested=True)
                 .returning(ResourceRow.id)
             )
             if updated_resource_id is None:
