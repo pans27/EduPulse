@@ -6,16 +6,13 @@ of replicas can run: SKIP LOCKED keeps them from claiming the same resource, and
 lease lets another replica retry a resource whose worker died mid-check.
 """
 import asyncio
-import json
-import logging
 import os
 import signal
 import socket
-import sys
 
 import asyncpg
 
-from . import store
+from . import logs, store
 from .checker import check, new_client
 from .classify import classify
 
@@ -27,19 +24,7 @@ POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "2"))
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
 
 
-class JsonFormatter(logging.Formatter):
-    # One JSON object per line, so logs can be filtered and counted for the evaluation.
-    def format(self, record: logging.LogRecord) -> str:
-        entry = {"ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"), "level": record.levelname,
-                 "worker": WORKER_ID, "msg": record.getMessage()}
-        entry.update(getattr(record, "fields", {}))
-        return json.dumps(entry)
-
-
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(JsonFormatter())
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-log = logging.getLogger("worker")
+log = logs.setup("worker", WORKER_ID)
 
 
 async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
