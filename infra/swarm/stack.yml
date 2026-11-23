@@ -108,6 +108,34 @@ services:
       resources:
         limits: {memory: 128M}
 
+  dispatcher:
+    <<: *db-client
+    image: ${REGISTRY:-edupulse}/worker:${TAG:-dev}
+    command: ["python", "-m", "worker.dispatch"]
+    environment:
+      POSTGRES_DB: edupulse
+      POSTGRES_USER: edupulse
+      # The mock sink until the DigitalOcean Function exists; then its URL and a token secret.
+      MAIL_ENDPOINT: http://mail-sink:8000/send
+    deploy:
+      # One is enough for the load; leases make a second replica safe if it is ever added.
+      replicas: 1
+      placement:
+        constraints: [node.labels.app == true]
+      resources:
+        limits: {memory: 96M}
+
+  mail-sink:
+    image: ${REGISTRY:-edupulse}/mail-sink:${TAG:-dev}
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.fakesite == true]
+      resources:
+        limits: {memory: 96M}
+
   fake-site:
     image: ${REGISTRY:-edupulse}/fake-site:${TAG:-dev}
     environment:

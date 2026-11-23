@@ -29,6 +29,7 @@ class ResourceRow(RegistryBase):
     release_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_check_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     state: Mapped[str | None] = mapped_column(String(20))
+    recheck_requested: Mapped[bool] = mapped_column(server_default=false())
 
 
 class StudentReportRow(RegistryBase):

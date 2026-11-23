@@ -49,6 +49,23 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Delivers queued alert emails. Same image as the worker, different entry point.
+  dispatcher:
+    build: ./services/worker
+    command: ["python", "-m", "worker.dispatch"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MAIL_ENDPOINT: http://mail-sink:8000/send
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Mock mail endpoint; open http://localhost:8003/messages to read what was "sent".
+  mail-sink:
+    build: ./services/mail-sink
+    ports:
+      - "127.0.0.1:8003:8000"
+
   nginx:
     image: nginx:1.28-alpine
     volumes:
