@@ -53,7 +53,7 @@ async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
         return
     fields |= {"state": recorded.after.state, "failures": recorded.after.consecutive_failures}
     if recorded.after.changed(recorded.before):
-        fields |= {"from": recorded.before, "incident": recorded.after.incident}
+        fields |= {"from": recorded.before, "incident": recorded.after.incident, "emails_queued": recorded.emails_queued}
         log.info("state changed", extra={"fields": fields})
     else:
         log.info("checked", extra={"fields": fields})

@@ -10,6 +10,7 @@ from uuid import UUID
 
 import asyncpg
 
+from . import outbox
 from .classify import Observation, Outcome
 from .states import Resource, Transition, transition
 
@@ -29,7 +30,7 @@ RETURNING r.id, r.url, r.lease_token
 """
 
 LOCK_SQL = """
-SELECT state, consecutive_failures, check_interval_seconds, release_at, now() AS now
+SELECT state, consecutive_failures, check_interval_seconds, release_at, course_id, name, now() AS now
 FROM resources
 WHERE id = $1 AND lease_token = $2
 FOR UPDATE
@@ -48,6 +49,7 @@ class Recorded:
     before: str | None
     after: Transition
     checked_at: datetime
+    emails_queued: int = 0
 
 
 async def claim(pool: asyncpg.Pool, worker_id: str, batch: int, lease_seconds: int) -> list[Claim]:
@@ -87,24 +89,37 @@ async def record(
             "lease_owner = NULL, lease_until = NULL, lease_token = NULL WHERE id = $1",
             item.resource_id, step.state, step.consecutive_failures, step.next_check_at,
         )
+        incident_id = None
         if step.incident == "open":
-            await conn.execute(
+            incident_id = await conn.fetchval(
                 "INSERT INTO incidents (resource_id, state, description) VALUES ($1, $2, $3) "
-                "ON CONFLICT (resource_id) WHERE resolved_at IS NULL DO NOTHING",
+                "ON CONFLICT (resource_id) WHERE resolved_at IS NULL DO NOTHING RETURNING id",
                 item.resource_id, step.state, detail,
             )
         elif step.incident == "update":
-            await conn.execute(
-                "UPDATE incidents SET state = $2, description = $3 WHERE resource_id = $1 AND resolved_at IS NULL",
+            incident_id = await conn.fetchval(
+                "UPDATE incidents SET state = $2, description = $3 "
+                "WHERE resource_id = $1 AND resolved_at IS NULL RETURNING id",
                 item.resource_id, step.state, detail,
             )
         elif step.incident == "resolve":
-            await conn.execute(
-                "UPDATE incidents SET resolved_at = now() WHERE resource_id = $1 AND resolved_at IS NULL",
+            incident_id = await conn.fetchval(
+                "UPDATE incidents SET resolved_at = now() WHERE resource_id = $1 AND resolved_at IS NULL RETURNING id",
                 item.resource_id,
             )
-        # Step 3 adds the notification_outbox row here, in this same transaction.
+        emails = 0
+        kind = outbox.kind_for(step.incident)
+        if kind is not None:
+            # Same transaction as the state change: the alert exists if and only if it committed.
+            message = outbox.payload(
+                course_id=row["course_id"], resource_name=row["name"], url=item.url,
+                before=before, after=step.state, detail=detail, at=row["now"],
+            )
+            status = await conn.execute(outbox.INSERT_SQL, item.resource_id, incident_id, kind, message, row["course_id"])
+            emails = int(status.split()[-1])  # "INSERT 0 <rows>"
+            if emails:
+                await conn.execute("SELECT pg_notify($1, '')", outbox.OUTBOX_CHANNEL)
         if step.changed(before) and notify_channel:
             # Delivered only after COMMIT, so API replicas never push an uncommitted state.
             await conn.execute("SELECT pg_notify($1, $2)", notify_channel, str(item.resource_id))
-        return Recorded(before, step, row["now"])
+        return Recorded(before, step, row["now"], emails)
