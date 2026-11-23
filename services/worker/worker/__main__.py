@@ -22,13 +22,15 @@ BATCH = int(os.environ.get("WORKER_BATCH", "10"))
 LEASE_SECONDS = int(os.environ.get("WORKER_LEASE_SECONDS", "30"))
 POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "2"))
 WORKER_ID = os.environ.get("WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
+# Leave 10 s of the lease for writing the result; never below 5 s.
+CHECK_DEADLINE_SECONDS = max(5, LEASE_SECONDS - 10)
 
 
 log = logs.setup("worker", WORKER_ID)
 
 
 async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
-    observation = await check(client, item.url)
+    observation = await check(client, item.url, CHECK_DEADLINE_SECONDS)
     outcome = classify(observation)
     recorded = await store.record(pool, item, observation, outcome, NOTIFY_CHANNEL)
     fields = {"resource": str(item.resource_id), "outcome": outcome, "status": observation.status,

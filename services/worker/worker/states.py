@@ -18,8 +18,11 @@ FAILURE_THRESHOLD = 3
 # about 2 x 15 s instead of 2 full intervals.
 SUSPECT_RECHECK_SECONDS = 15
 
-# States that mean "staff should know": entering one opens an incident, leaving one resolves it.
+# States that mean "staff should know": entering one opens an incident.
 ALERT_STATES: frozenset[str] = frozenset({"DOWN", "MISSING", "AUTH_REQUIRED"})
+# Only a check that confirms the resource works again resolves the incident. SUSPECT does not:
+# AUTH_REQUIRED followed by a timeout is still a failing resource, not a recovery.
+RECOVERED_STATES: frozenset[str] = frozenset({"HEALTHY", "DEGRADED"})
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class Resource:
     consecutive_failures: int
     check_interval_seconds: int
     release_at: datetime | None = None
+    open_incident: State | None = None  # state recorded on the open incident, if there is one
 
 
 @dataclass(frozen=True)
@@ -41,15 +45,17 @@ class Transition:
         return self.state != before
 
 
-def _incident_action(before: State | None, after: State | None) -> IncidentAction:
-    was_alert, is_alert = before in ALERT_STATES, after in ALERT_STATES
-    if is_alert and not was_alert:
-        return "open"
-    if was_alert and not is_alert:
+def _incident_action(open_incident: State | None, after: State | None) -> IncidentAction:
+    # Decided from the incident that is actually open (read from the database in the same
+    # transaction), not from the previous resource state, which cannot tell a SUSPECT that came
+    # from HEALTHY from one that came from DOWN.
+    if after in ALERT_STATES:
+        if open_incident is None:
+            return "open"
+        return "update" if open_incident != after else None  # e.g. DOWN -> AUTH_REQUIRED
+    if after in RECOVERED_STATES and open_incident is not None:
         return "resolve"
-    if was_alert and is_alert and before != after:
-        return "update"  # e.g. DOWN -> AUTH_REQUIRED: same incident, new state
-    return None
+    return None  # SUSPECT, or nothing changed: an open incident stays open
 
 
 def transition(resource: Resource, outcome: Outcome, now: datetime) -> Transition:
@@ -82,4 +88,4 @@ def transition(resource: Resource, outcome: Outcome, now: datetime) -> Transitio
         next_check_at = now + min(interval, timedelta(seconds=SUSPECT_RECHECK_SECONDS))
     else:
         next_check_at = now + interval
-    return Transition(state, failures, next_check_at, _incident_action(resource.state, state))
+    return Transition(state, failures, next_check_at, _incident_action(resource.open_incident, state))

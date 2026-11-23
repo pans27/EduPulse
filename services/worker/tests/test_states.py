@@ -1,22 +1,30 @@
 from datetime import datetime, timedelta, timezone
 from unittest import TestCase
 
-from worker.states import FAILURE_THRESHOLD, Resource, transition
+from worker.states import ALERT_STATES, FAILURE_THRESHOLD, Resource, transition
 
 NOW = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
 
 
-def resource(state=None, failures=0, interval=60, release_at=None):
-    return Resource(state, failures, interval, release_at)
+def resource(state=None, failures=0, interval=60, release_at=None, incident="same"):
+    # By default a resource in an alert state has an open incident recording that state.
+    open_incident = (state if state in ALERT_STATES else None) if incident == "same" else incident
+    return Resource(state, failures, interval, release_at, open_incident)
 
 
 def run(outcomes, start=None, **kwargs):
-    # Apply outcomes in order and return every transition.
+    # Apply outcomes in order, tracking the open incident the way the worker's transaction does.
     current, steps = start or resource(**kwargs), []
     for outcome in outcomes:
         step = transition(current, outcome, NOW)
         steps.append(step)
-        current = Resource(step.state, step.consecutive_failures, current.check_interval_seconds, current.release_at)
+        incident = current.open_incident
+        if step.incident in ("open", "update"):
+            incident = step.state
+        elif step.incident == "resolve":
+            incident = None
+        current = Resource(step.state, step.consecutive_failures, current.check_interval_seconds,
+                           current.release_at, incident)
     return steps
 
 
@@ -93,3 +101,27 @@ class TransitionTests(TestCase):
         step = transition(resource("HEALTHY"), "ok", NOW)
         self.assertFalse(step.changed("HEALTHY"))
         self.assertTrue(transition(resource(None), "ok", NOW).changed(None))
+
+    def test_suspect_after_an_alert_keeps_the_incident_open(self):
+        # AUTH_REQUIRED, then a timeout: still failing, so no recovery email.
+        steps = run(["error"], start=resource("AUTH_REQUIRED"))
+        self.assertEqual((steps[0].state, steps[0].incident), ("SUSPECT", None))
+
+    def test_incident_resolves_only_on_confirmed_recovery(self):
+        steps = run(["auth", "error", "error", "ok"], start=resource("HEALTHY"))
+        self.assertEqual([s.state for s in steps], ["AUTH_REQUIRED", "SUSPECT", "SUSPECT", "HEALTHY"])
+        self.assertEqual([s.incident for s in steps], ["open", None, None, "resolve"])
+
+    def test_failing_on_after_an_alert_updates_the_same_incident(self):
+        # AUTH_REQUIRED, then 3 errors: the open incident moves to DOWN, no second "opened" email.
+        steps = run(["auth", "error", "error", "error"], start=resource("HEALTHY"))
+        self.assertEqual([s.incident for s in steps], ["open", None, None, "update"])
+        self.assertEqual(steps[-1].state, "DOWN")
+
+    def test_returning_to_the_incident_state_is_not_an_update(self):
+        steps = run(["error", "auth"], start=resource("AUTH_REQUIRED"))
+        self.assertEqual([s.incident for s in steps], [None, None])
+
+    def test_suspect_from_healthy_never_resolves_anything(self):
+        steps = run(["error", "ok"], start=resource("HEALTHY"))
+        self.assertEqual([s.incident for s in steps], [None, None])

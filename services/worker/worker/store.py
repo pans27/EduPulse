@@ -26,14 +26,19 @@ UPDATE resources AS r
 SET lease_owner = $2, lease_until = now() + make_interval(secs => $3), lease_token = gen_random_uuid()
 FROM due
 WHERE r.id = due.id
-RETURNING r.id, r.url, r.lease_token
+RETURNING r.id, r.url, r.lease_token, now() AS claimed_at
 """
 
+# Locks the row (only while we still hold the lease) and reads, in the same transaction, the
+# open incident and whether a student reported the resource after this check was claimed.
 LOCK_SQL = """
-SELECT state, consecutive_failures, check_interval_seconds, release_at, course_id, name, now() AS now
-FROM resources
-WHERE id = $1 AND lease_token = $2
-FOR UPDATE
+SELECT r.state, r.consecutive_failures, r.check_interval_seconds, r.release_at, r.course_id, r.name,
+       now() AS now,
+       (SELECT i.state FROM incidents i WHERE i.resource_id = r.id AND i.resolved_at IS NULL) AS open_incident,
+       EXISTS (SELECT 1 FROM student_reports s WHERE s.resource_id = r.id AND s.created_at > $3) AS reported_mid_check
+FROM resources r
+WHERE r.id = $1 AND r.lease_token = $2
+FOR UPDATE OF r
 """
 
 
@@ -42,6 +47,7 @@ class Claim:
     resource_id: UUID
     url: str
     lease_token: UUID
+    claimed_at: datetime
 
 
 @dataclass(frozen=True)
@@ -54,7 +60,7 @@ class Recorded:
 
 async def claim(pool: asyncpg.Pool, worker_id: str, batch: int, lease_seconds: int) -> list[Claim]:
     rows = await pool.fetch(CLAIM_SQL, batch, worker_id, float(lease_seconds))
-    return [Claim(row["id"], row["url"], row["lease_token"]) for row in rows]
+    return [Claim(row["id"], row["url"], row["lease_token"], row["claimed_at"]) for row in rows]
 
 
 def _describe(observation: Observation) -> str:
@@ -68,15 +74,22 @@ async def record(
 ) -> Recorded | None:
     """Apply one check in a single transaction. Returns None if the lease was lost."""
     async with pool.acquire() as conn, conn.transaction():
-        row = await conn.fetchrow(LOCK_SQL, item.resource_id, item.lease_token)
+        row = await conn.fetchrow(LOCK_SQL, item.resource_id, item.lease_token, item.claimed_at)
         if row is None:
             return None  # lease expired and another worker took over; its result wins
         before = row["state"]
         step = transition(
-            Resource(before, row["consecutive_failures"], row["check_interval_seconds"], row["release_at"]),
+            Resource(before, row["consecutive_failures"], row["check_interval_seconds"], row["release_at"],
+                     row["open_incident"]),
             outcome,
             row["now"],
         )
+        next_check_at = step.next_check_at
+        if row["reported_mid_check"]:
+            # A report that arrived while this check ran asked for a fresh check. The report's own
+            # UPDATE could not move next_check_at (the row was already due), so honour it here,
+            # instead of overwriting it with the normal interval.
+            next_check_at = min(next_check_at, row["now"])
         detail = _describe(observation)
         await conn.execute(
             "INSERT INTO check_results (resource_id, http_status, latency_ms, outcome, error_message) "
@@ -87,7 +100,7 @@ async def record(
         await conn.execute(
             "UPDATE resources SET state = $2, consecutive_failures = $3, next_check_at = $4, "
             "lease_owner = NULL, lease_until = NULL, lease_token = NULL WHERE id = $1",
-            item.resource_id, step.state, step.consecutive_failures, step.next_check_at,
+            item.resource_id, step.state, step.consecutive_failures, next_check_at,
         )
         incident_id = None
         if step.incident == "open":
