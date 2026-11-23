@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $course = "eval-scale-$Workers-$RunId"
-if ($LASTEXITCODE -ne 0) { throw 'Previous command failed.' }
+
 if (-not (Test-Path 'docker-compose.yml') -and -not (Test-Path 'compose.yaml') -and -not (Test-Path 'compose.yml')) {
     throw 'Run this script from the EduPulse repository root.'
 }
