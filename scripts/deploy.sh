@@ -57,9 +57,12 @@ echo "deployed $TAG; waiting for the migrate job"
 # answer 503 until the tables exist). What the script can do is refuse to report success unless
 # migrate completed for this tag. 5 minutes covers its 10 retries 5 s apart while Postgres starts.
 ssh "$MANAGER" bash -s -- "$TAG" "${MIGRATE_WAIT_SECONDS:-300}" <<'REMOTE'
+set -uo pipefail
 tag=$1 deadline=$((SECONDS + $2))
 while (( SECONDS < deadline )); do
-  task=$(docker service ps edupulse_migrate --format '{{.Image}} {{.CurrentState}}' | grep ":$tag " | head -1 || true)
+  # A failed docker command leaves $tasks empty, which never matches Complete.
+  tasks=$(docker service ps edupulse_migrate --format '{{.Image}} {{.CurrentState}}') || tasks=
+  task=$(grep -m1 ":$tag " <<<"$tasks") || task=
   case $task in *Complete*) echo "migrate: $task"; exit 0 ;; esac
   sleep 3
 done
@@ -69,13 +72,51 @@ docker service logs --tail 30 edupulse_migrate >&2 || true
 exit 1
 REMOTE
 
-echo "waiting for every service to reach its replica count"
-ssh "$MANAGER" bash -s -- "${CONVERGE_WAIT_SECONDS:-180}" <<'REMOTE'
-deadline=$((SECONDS + $1))
-until docker stack services edupulse --format '{{.Name}} {{.Replicas}}' | grep -v _migrate \
-      | awk '{split($2, r, "/"); if (r[1] != r[2]) bad = 1} END {exit bad}'; do
+# Success means every service built from this commit runs the new tag, not just that replica counts
+# match: counts can be full while old tasks are still serving, or after Swarm rolled an update back.
+echo "waiting for the services to run $TAG"
+ssh "$MANAGER" bash -s -- "$TAG" "${CONVERGE_WAIT_SECONDS:-180}" "$REGISTRY" <<'REMOTE'
+set -uo pipefail
+tag=$1 wait=$2 registry=$3 deadline=$((SECONDS + $2))
+
+# Prints why the stack is not ready yet; returns 2 for a state that waiting cannot fix.
+not_ready() {
+  local listing name replicas spec state running ours=0
+  listing=$(docker stack services edupulse --format '{{.Name}} {{.Replicas}}') || { echo "docker stack services failed"; return 1; }
+  [[ -n $listing ]] || { echo "docker stack services returned nothing"; return 1; }
+  while read -r name replicas; do
+    [[ $name == *_migrate ]] && continue  # the job is checked separately
+    # Every long-running service at full replicas.
+    [[ ${replicas%%/*} == "${replicas#*/}" ]] || { echo "$name at $replicas"; return 1; }
+    spec=$(docker service inspect "$name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}') \
+      || { echo "cannot inspect $name"; return 1; }
+    [[ $spec == "$registry/"* ]] || continue  # nginx and postgres are not built by us
+    ours=$((ours + 1))
+    state=$(docker service inspect "$name" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}') \
+      || { echo "cannot inspect $name"; return 1; }
+    case $state in
+      rollback_*|paused) echo "$name update is $state (spec now $spec)"; return 2 ;;
+    esac
+    # The spec must point at this tag; after a rollback it points back at the old one.
+    [[ $spec == *":$tag@"* || $spec == *":$tag" ]] || { echo "$name spec is $spec"; return 2; }
+    running=$(docker service ps "$name" --filter desired-state=running --format '{{.Image}} {{.CurrentState}}') \
+      || { echo "cannot list $name tasks"; return 1; }
+    [[ -n $running ]] || { echo "$name has no tasks"; return 1; }
+    # Each task that should be running must run the new image and actually be Running.
+    if grep -v ":$tag Running" <<<"$running" | grep -q .; then
+      echo "$name still has: $(grep -v ":$tag Running" <<<"$running" | head -1)"; return 1
+    fi
+  done <<<"$listing"
+  (( ours > 0 )) || { echo "no services built from $registry found"; return 1; }
+  return 0
+}
+
+while true; do
+  reason=$(not_ready); code=$?
+  (( code == 0 )) && break
+  if (( code == 2 )); then echo "rollout failed: $reason" >&2; exit 1; fi
   if (( SECONDS >= deadline )); then
-    echo "services did not converge:" >&2
+    echo "services not running $tag after $wait s: $reason" >&2
     docker stack services edupulse --format '{{.Name}} {{.Replicas}} {{.Image}}' >&2
     exit 1
   fi
