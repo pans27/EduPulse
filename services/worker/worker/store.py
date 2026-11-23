@@ -1,0 +1,110 @@
+"""PostgreSQL side of the worker: claim due resources with a lease, then record each result.
+
+Claim and record are separate short transactions so no row lock is held during the HTTP
+check. The lease_token fences a slow worker: if its lease expired and another worker claimed
+the resource, the stale result is discarded instead of overwriting the newer one.
+"""
+from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
+
+import asyncpg
+
+from .classify import Observation, Outcome
+from .states import Resource, Transition, transition
+
+CLAIM_SQL = """
+WITH due AS (
+    SELECT id FROM resources
+    WHERE next_check_at <= now() AND (lease_until IS NULL OR lease_until < now())
+    ORDER BY next_check_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE resources AS r
+SET lease_owner = $2, lease_until = now() + make_interval(secs => $3), lease_token = gen_random_uuid()
+FROM due
+WHERE r.id = due.id
+RETURNING r.id, r.url, r.lease_token
+"""
+
+LOCK_SQL = """
+SELECT state, consecutive_failures, check_interval_seconds, release_at, now() AS now
+FROM resources
+WHERE id = $1 AND lease_token = $2
+FOR UPDATE
+"""
+
+
+@dataclass(frozen=True)
+class Claim:
+    resource_id: UUID
+    url: str
+    lease_token: UUID
+
+
+@dataclass(frozen=True)
+class Recorded:
+    before: str | None
+    after: Transition
+    checked_at: datetime
+
+
+async def claim(pool: asyncpg.Pool, worker_id: str, batch: int, lease_seconds: int) -> list[Claim]:
+    rows = await pool.fetch(CLAIM_SQL, batch, worker_id, float(lease_seconds))
+    return [Claim(row["id"], row["url"], row["lease_token"]) for row in rows]
+
+
+def _describe(observation: Observation) -> str:
+    if observation.error:
+        return observation.error
+    return f"HTTP {observation.status}" + (f" via {observation.final_url}" if observation.final_url != observation.requested_url else "")
+
+
+async def record(
+    pool: asyncpg.Pool, item: Claim, observation: Observation, outcome: Outcome, notify_channel: str | None
+) -> Recorded | None:
+    """Apply one check in a single transaction. Returns None if the lease was lost."""
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(LOCK_SQL, item.resource_id, item.lease_token)
+        if row is None:
+            return None  # lease expired and another worker took over; its result wins
+        before = row["state"]
+        step = transition(
+            Resource(before, row["consecutive_failures"], row["check_interval_seconds"], row["release_at"]),
+            outcome,
+            row["now"],
+        )
+        detail = _describe(observation)
+        await conn.execute(
+            "INSERT INTO check_results (resource_id, http_status, latency_ms, outcome, error_message) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            item.resource_id, observation.status, observation.latency_ms, outcome,
+            observation.error,
+        )
+        await conn.execute(
+            "UPDATE resources SET state = $2, consecutive_failures = $3, next_check_at = $4, "
+            "lease_owner = NULL, lease_until = NULL, lease_token = NULL WHERE id = $1",
+            item.resource_id, step.state, step.consecutive_failures, step.next_check_at,
+        )
+        if step.incident == "open":
+            await conn.execute(
+                "INSERT INTO incidents (resource_id, state, description) VALUES ($1, $2, $3) "
+                "ON CONFLICT (resource_id) WHERE resolved_at IS NULL DO NOTHING",
+                item.resource_id, step.state, detail,
+            )
+        elif step.incident == "update":
+            await conn.execute(
+                "UPDATE incidents SET state = $2, description = $3 WHERE resource_id = $1 AND resolved_at IS NULL",
+                item.resource_id, step.state, detail,
+            )
+        elif step.incident == "resolve":
+            await conn.execute(
+                "UPDATE incidents SET resolved_at = now() WHERE resource_id = $1 AND resolved_at IS NULL",
+                item.resource_id,
+            )
+        # Step 3 adds the notification_outbox row here, in this same transaction.
+        if step.changed(before) and notify_channel:
+            # Delivered only after COMMIT, so API replicas never push an uncommitted state.
+            await conn.execute("SELECT pg_notify($1, $2)", notify_channel, str(item.resource_id))
+        return Recorded(before, step, row["now"])
