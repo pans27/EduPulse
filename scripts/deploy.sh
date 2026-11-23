@@ -28,6 +28,7 @@ if [[ $BUILD == 1 ]]; then
   build api services/api &
   build worker services/worker &
   build fake-site services/fake-site &
+  build mail-sink services/mail-sink &
   build migrate -f db/Dockerfile . &
   wait
 fi
