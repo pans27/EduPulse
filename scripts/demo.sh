@@ -10,6 +10,8 @@
 #   scripts/demo.sh mail-reset                         # empty the mail sink before a demo
 #   scripts/demo.sh services                           # Swarm services: replicas, version, nodes
 #   scripts/demo.sh kill-api                           # kill one API container; Swarm replaces it
+#   scripts/demo.sh restart-db                         # replace the Postgres container; show the data survived
+#   scripts/demo.sh logs [service] [minutes]           # recent JSON logs, readable (default: worker, 2 min)
 #   scripts/demo.sh db                                 # open Adminer (database viewer) via an SSH tunnel
 #   scripts/demo.sh remove <resource> [course]         # delete a registered resource (name or …/r/<resource>)
 #                                                      # (rehearsal reset; the API has no delete yet)
@@ -20,6 +22,8 @@
 # Needs SSH access as root to the Droplets. The fake-site admin token and the database password stay
 # on the servers: commands run inside the containers that already have them.
 set -euo pipefail
+
+usage() { sed -n '3,/^set -euo/p' "$0" | sed '$d'; exit 1; }
 
 MANAGER=${MANAGER:-138.197.173.188}
 # Public IP of a node, by Swarm hostname (a case, since macOS ships bash 3.2 without associative arrays).
@@ -78,7 +82,7 @@ SQL
 
 case "${1:-}" in
   break)
-    [[ $# -ge 2 ]] || { sed -n '3,19p' "$0"; exit 1; }
+    [[ $# -ge 2 ]] || usage
     name=$2 mode=${3:-not_found}; shift $(( $# >= 3 ? 3 : 2 ))
     body="{\"mode\":\"$mode\""
     for kv in "$@"; do
@@ -140,11 +144,74 @@ PY
     echo "Tunnel open; press Ctrl-C to close it (Adminer is stopped too)."
     trap 'on_manager "docker rm -f ep-adminer >/dev/null 2>&1"; echo; echo "Adminer stopped."' EXIT
     ssh -o LogLevel=ERROR -N -L 8081:127.0.0.1:8081 "root@$MANAGER" ;;
+  restart-db)
+    # Persistence evidence: a brand-new Postgres container comes up on the same DigitalOcean Volume
+    # and every row written before the restart is still there.
+    snapshot() {
+      psql_manager <<SQL
+SELECT 'users', count(*) FROM users
+UNION ALL SELECT 'resources', count(*) FROM resources
+UNION ALL SELECT 'incidents', count(*) FROM incidents
+UNION ALL SELECT 'check results before restart', count(*) FROM check_results WHERE checked_at <= '$1'
+UNION ALL SELECT 'emails before restart', count(*) FROM notification_outbox WHERE created_at <= '$1'
+UNION ALL SELECT 'student reports before restart', count(*) FROM student_reports WHERE created_at <= '$1';
+SQL
+    }
+    container() { on_manager_n 'docker ps -q -f name=edupulse_postgres'; }
+    cutoff=$(on_manager_n 'docker exec $(docker ps -q -f name=edupulse_postgres) psql -U edupulse -d edupulse -Atc "SELECT now()"')
+    before_id=$(container)
+    echo "data directory: $(on_manager_n "docker inspect $before_id --format '{{range .Mounts}}{{.Source}}{{end}}'") (DigitalOcean Volume, mounted at /mnt/edupulse_pgdata)"
+    echo "== before: Postgres container $before_id"; snapshot "$cutoff" | tee "${TMPDIR:-/tmp}/edupulse-before.txt"
+    echo; echo "replacing the Postgres container at $(date +%T) ..."
+    started=$SECONDS
+    on_manager_n 'docker service update -d -q --force edupulse_postgres >/dev/null'
+    # Poll the public site until a new container answers: /health reports the database outage.
+    for i in $(seq 1 60); do
+      code=$(curl -s -o /dev/null -w '%{http_code}' -m 3 "$SITE/health")
+      now_id=$(container)
+      echo "  $(date +%T)  /health $code   postgres container ${now_id:-(none)}"
+      [[ $code == 200 && -n $now_id && $now_id != "$before_id" ]] && break
+      sleep 2
+    done
+    echo "database back after $((SECONDS - started)) s"
+    echo; echo "== after: Postgres container $(container)"; snapshot "$cutoff" | tee "${TMPDIR:-/tmp}/edupulse-after.txt"
+    if diff -q "${TMPDIR:-/tmp}/edupulse-before.txt" "${TMPDIR:-/tmp}/edupulse-after.txt" >/dev/null; then
+      echo; echo "every row from before the restart is still there"
+    else
+      echo; echo "rows differ:"; diff "${TMPDIR:-/tmp}/edupulse-before.txt" "${TMPDIR:-/tmp}/edupulse-after.txt" || true
+    fi ;;
+  logs)
+    service=${2:-worker} minutes=${3:-2}
+    [[ $service =~ ^[a-z-]+$ && $minutes =~ ^[0-9]+$ ]] || usage
+    # Resource ids in the logs are shown with their names.
+    echo "SELECT id, name FROM resources;" | psql_manager > "${TMPDIR:-/tmp}/edupulse-names.txt"
+    on_manager_n "docker service logs --raw --since ${minutes}m edupulse_$service 2>&1" | tail -200 \
+      | python3 -c '
+import json, sys
+names = dict(line.strip().split(" | ", 1) for line in open(sys.argv[1]) if " | " in line)
+events = []
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue  # non-JSON lines (e.g. an old placeholder image) are skipped
+    if isinstance(e, dict):
+        events.append(e)
+events.sort(key=lambda e: e.get("ts", ""))  # replicas log separately; merge them by time
+for e in events:
+    ts, msg = e.pop("ts", "")[-8:], e.pop("msg", "")
+    for k in ("level", "service", "instance"):
+        e.pop(k, None)
+    if "resource" in e:
+        e["resource"] = names.get(e["resource"], e["resource"][:8])
+    fields = "  ".join(f"{k}={v}" for k, v in e.items() if v is not None)
+    print(f"  {ts}  {msg:14} {fields}")
+' "${TMPDIR:-/tmp}/edupulse-names.txt" | tail -25 ;;
   remove)
     [[ $# -ge 2 ]] || { echo "usage: $0 remove <resource> [course]" >&2; exit 1; }
     [[ $2 =~ ^[A-Za-z0-9_.-]+$ && ${3:-ece1779} =~ ^[A-Za-z0-9_-]+$ ]] || { echo "bad name" >&2; exit 1; }
     # Check results, incidents, reports and outbox rows go with it (ON DELETE CASCADE).
     # Matches the display name or the fake-site name at the end of the URL (…/r/<name>).
     echo "DELETE FROM resources WHERE course_id = '${3:-ece1779}' AND (name = '$2' OR url LIKE '%/r/$2') RETURNING 'removed ' || name || ' (' || url || ')';" | psql_manager ;;
-  *) sed -n '3,19p' "$0"; exit 1 ;;
+  *) usage ;;
 esac

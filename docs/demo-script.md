@@ -1,218 +1,231 @@
-# EduPulse live demo script
+# EduPulse presentation and live demo
 
-About 4 minutes of the 6-minute slot, on the DigitalOcean deployment. Every terminal step is one
-`scripts/demo.sh` command; run `scripts/demo.sh` with no arguments for the list.
+6 minutes, strictly enforced, then about 2 minutes of Q&A. The plan follows the presentation rubric:
+**Clarity & Communication (6)**, **Technical Progress & Demonstration (10)**: containers,
+persistence, orchestration, monitoring; and **Advanced Features & Completion Plan (4)**. Most of the
+time goes to evidence for those, not to a product walkthrough.
 
-## What you need
+## Roles and setup
 
-| Item | Detail |
-|---|---|
-| Site | **https://138-197-173-188.sslip.io** (redirects to `/dashboard/`) |
-| Staff account | `vianne.liu@mail.utoronto.ca`, assigned **staff** on `ece1779` |
-| Student account | `yuanliu0922@gmail.com`, assigned **student** on `ece1779` |
-| Admin account | `liuyuan9387@gmail.com` (also staff on `ece1779`) |
-| Laptop | The one whose SSH key is on the Droplets (Yuan's). `demo.sh` uses SSH to run commands on the servers |
-| Repo | A checkout of `main`, terminal in the repository root |
+- **Speaker:** explains, from slides with keywords only, no script.
+- **Operator:** Yuan, on Yuan's laptop (the only one with SSH access to the Droplets); runs every
+  demo command and switches windows.
+- **One laptop** for everything, display **mirrored** (not extended). Arrive at 12:05 to test the
+  projector (USB-C or HDMI).
+- Everyone answers Q&A; see the question list at the end.
 
-Passwords are the ones the account owners set; they are not stored in the repo.
+### Windows, open before our turn
 
-## Screen layout
+| # | Window | Content |
+|---|---|---|
+| 1 | Slides | |
+| 2 | Browser A (normal) | https://138-197-173-188.sslip.io signed in as **staff** (`vianne.liu@mail.utoronto.ca`), course **ECE1779** |
+| 3 | Browser B (private window) | Same site, signed in as **student** (`yuanliu0922@gmail.com`), course **ECE1779** |
+| 4 | Terminal, large font | `scripts/demo.sh watch` (states, open incidents, email outbox every 2 s) |
+| 5 | Terminal, large font | Commands below, in the repository root |
+| 6 | Browser tab | DigitalOcean console → Monitoring (Uptime check, Alerts), already signed in |
+| 7 | Backup | Short recordings of each live step, and screenshots, in case the cloud or Wi-Fi fails |
 
-| Window | Content |
-|---|---|
-| **Browser A** (normal window) | Signed in as **staff** |
-| **Browser B** (private / incognito window, so it has its own session cookie) | Signed in as **student** |
-| **Terminal 1** | `scripts/demo.sh watch`: states, open incidents and the email outbox, refreshed every 2 s |
-| **Terminal 2** | The commands below |
+Terminal font: large enough for the back row (about 20 pt).
 
-Put the two browsers side by side; the audience should see both change at the same time.
-
-## 15 minutes before
+### 30 minutes before
 
 ```bash
 cd ~/ECE1779/EduPulse && git switch main && git pull
 ```
 
 ```bash
-scripts/demo.sh services          # all services full, our images on the same commit
+scripts/demo.sh services
+```
+
+All services full, our images on one commit.
+
+```bash
+scripts/demo.sh remove a1-handout
 ```
 
 ```bash
-scripts/demo.sh remove a1-handout # only if a previous rehearsal registered it ("removed …")
+scripts/demo.sh fix a1-handout && scripts/demo.sh mail-reset
 ```
 
-```bash
-scripts/demo.sh remove dataset
-```
+**Register the demo resource in advance** (saves 30 s on stage). In Browser A, **Register a
+resource**: Name `Assignment 1 handout`, Resource URL `http://fake-site:8000/r/a1-handout`, Check
+interval `10`, Expected release empty → **Register**. Wait until it is HEALTHY in both browsers and
+"Live updates connected" shows under the heading.
 
-```bash
-scripts/demo.sh fix a1-handout && scripts/demo.sh fix dataset
-```
+## The 6 minutes
 
-```bash
-scripts/demo.sh mail-reset        # empty mailbox
-```
+| Time | Section | Rubric |
+|---|---|---|
+| 0:00–0:40 | Problem and users | Clarity |
+| 0:40–1:30 | Architecture | Clarity, Technical |
+| 1:30–2:15 | **Live 1:** outage detected, pushed live, emailed | Advanced features 1 and 2 |
+| 2:15–2:55 | **Live 2:** orchestration | Orchestration |
+| 2:55–3:40 | **Live 3:** persistence | Persistence |
+| 3:40–4:10 | **Live 4:** monitoring and logs | Monitoring |
+| 4:10–5:20 | Advanced features and completion plan | Advanced features |
+| 5:20–6:00 | Failover evidence, limitations, what's left | Technical, plan |
 
-Then sign in on both browsers (**Sign in to EduPulse** → Email, Password → **Sign in**), select
-course **ECE1779** in the top-right **Course** menu, and start `scripts/demo.sh watch` in Terminal 1.
-Check that both browsers say **Live updates connected** under the heading.
+At the 1-minute hand signal you should be starting the advanced-features slide. If a live step
+fails, switch to its recording at once; troubleshooting time counts toward the 6 minutes.
 
-## The demo
+### 0:00–0:40 Problem and users (slide 1)
 
-### 1. Staff registers a resource (0:00, Browser A)
+Keywords: course sites, recordings and assignment links break or miss their release; students find
+out first. EduPulse checks them, shows status live, emails staff and students. Users: course staff
+register resources; students view and report.
 
-In **Register a resource** on the right:
+### 0:40–1:30 Architecture (slide 2: one diagram)
 
-| Field | Value |
-|---|---|
-| Name | `Assignment 1 handout` |
-| Resource URL | `http://fake-site:8000/r/a1-handout` |
-| Check interval in seconds | `10` |
-| Expected release (optional) | leave empty |
+Point at each part once:
+- 3 DigitalOcean Droplets in a Docker Swarm, private network.
+- Nginx with HTTPS → **API ×3** (stateless) → **PostgreSQL**, the only place state lives:
+  resources, check history, incidents, users, sessions, email outbox.
+- **Workers ×2** claim due checks from Postgres with leases, so two workers never check the same
+  resource and a dead worker's job is retried.
+- **Dispatcher** sends alert emails from the outbox.
+- Postgres data on a **DigitalOcean Volume**; monitoring by DigitalOcean metrics, alerts and an
+  uptime check.
 
-Click **Register**. It appears as **Awaiting first check**, then **HEALTHY** within a couple of
-seconds, in **both** browsers without a refresh.
+### 1:30–2:15 Live 1: an outage, detected and pushed (windows 2–5)
 
-> Say: staff register course resources; a pool of workers checks them. Both dashboards update
-> live over WebSockets, even though they may be connected to different API replicas.
-
-### 2. Student view (0:40, Browser B)
-
-Point out: no **Register a resource** form for students; each resource has **Report issue**.
-
-> Say: roles come from course membership; the API enforces them, not just the page.
-
-### 3. The handout disappears (1:00, Terminal 2)
+Operator:
 
 ```bash
 scripts/demo.sh break a1-handout not_found
 ```
 
-Within ~10 s it turns **SUSPECT**, then **SUSPECT** again, then **DOWN** about 20–30 s after the
-break. Terminal 1 shows the failure count climbing and an open incident `DOWN | HTTP 404`.
+Speaker, while waiting (~25 s): the fake course site now returns 404 for the handout. A single
+failure is not an alert: it becomes SUSPECT and is rechecked sooner; only 3 failures in a row make
+it DOWN, which avoids false alarms.
 
-> Say: one failed check never alerts; we wait for 3 in a row, rechecking a suspect resource sooner
-> than usual. Our fake course site lets us inject the failures.
+Both browsers turn **SUSPECT**, then **DOWN** without a refresh; window 4 shows the open incident.
 
-### 4. The alert emails (1:40, Terminal 2)
+> Advanced feature 1, real-time: the worker issues a Postgres NOTIFY when the state changes, every
+> API replica receives it and pushes the new state over WebSockets, so it does not matter which
+> replica a browser is connected to.
 
 ```bash
 scripts/demo.sh mail
 ```
 
-Shows one email per course member: `[EduPulse] Assignment 1 handout is DOWN`, with course, URL,
-`SUSPECT -> DOWN`, `HTTP 404`, and its Message-ID.
+> Advanced feature 2, notifications: one email per course member. The email is written to an
+> outbox in the same transaction as the state change, so an alert exists if and only if the state
+> change committed. This is a mock mail endpoint; the DigitalOcean Function plus SendGrid comes next.
 
-> Say: the alert is written to an outbox in the same database transaction as the state change, so
-> an alert exists if and only if the change happened. A separate dispatcher sends it. If the
-> dispatcher crashes after sending but before recording it, the email is sent again with the same
-> Message-ID, and the receiver drops the duplicate (we tested that crash; slide N).
-> This is a mock mail endpoint; the real path is a DigitalOcean Function and SendGrid.
-
-### 5. A student spots a problem first (2:10)
-
-Terminal 2, a resource that is only checked every 10 minutes:
-
-```bash
-scripts/demo.sh fix dataset
-```
-
-Browser A registers **Name** `Dataset`, **Resource URL** `http://fake-site:8000/r/dataset`,
-**Check interval** `600` → HEALTHY. Then break it:
-
-```bash
-scripts/demo.sh break dataset server_error
-```
-
-Nothing changes on the dashboard: the next check is 10 minutes away (Terminal 1 shows
-`next check in 09:5x`). In Browser B click **Report issue** on Dataset → Description
-`The dataset link returns an error` → **Submit report** → "Report submitted. Recheck requested."
-It turns **SUSPECT** within a few seconds and **DOWN** about 30 s later.
-
-> Say: a report makes the resource due immediately, even if a check is already running.
-
-### 6. Recovery (3:00, Terminal 2)
+Then restore it, so it recovers during the next steps:
 
 ```bash
 scripts/demo.sh fix a1-handout
 ```
 
-Within ~10 s **HEALTHY**; the incident closes (Terminal 1); `scripts/demo.sh mail` now also shows
-`… is back (HEALTHY)`.
-
-> Say: only a successful check closes an incident; a timeout after a login wall would not.
-
-### 7. Infrastructure (3:20, Terminal 2)
+### 2:15–2:55 Live 2: orchestration
 
 ```bash
 scripts/demo.sh services
 ```
 
-Three Droplets in a Docker Swarm: API ×3, workers ×2, dispatcher, Postgres on a DigitalOcean
-Volume, Nginx with Let's Encrypt.
+> Eight services on three nodes; API with 3 replicas, workers with 2. All images are tagged with
+> the git commit they were built from.
 
 ```bash
 scripts/demo.sh kill-api
 ```
 
-Kills an API container; replicas go `2/3` and back to `3/3` in about 20 s while the site keeps
-answering `200` and the dashboards stay live.
+> I just killed one API container. Swarm sees 2 of 3 and starts a replacement; the site keeps
+> answering 200 because the other replicas serve it. (Point at Browser B: still live.)
 
-> Say: in our failover rehearsal we also powered off a whole node: Swarm moved its workers in 7 s
-> and 507 out of 507 requests succeeded (slide N).
-
-Optional, if time: DigitalOcean console → **Monitoring** → Uptime check and alert policies.
-
-## Other stories to try
-
-| Story | Command | What you see |
-|---|---|---|
-| Material behind a login | `break a1-handout login_redirect` | AUTH_REQUIRED after one check; a 302 to /login ends in 200, so a status code alone would say healthy |
-| Flaky site, no false alarm | `break a1-handout fail_every_k k=3` | Occasional SUSPECT, never DOWN, no email |
-| Random flapping | `break a1-handout flapping fail_rate=0.3` | Mostly HEALTHY/SUSPECT |
-| Slow server | `break a1-handout slow delay_ms=4000` | DEGRADED, no email |
-| Server refuses HEAD | `break a1-handout head_not_allowed` | Stays HEALTHY (falls back to GET) |
-| Login wall, then the server dies | `login_redirect`, then `server_error` | Incident stays open through SUSPECT, then the same incident moves to DOWN |
-| Missed release | Register with **Expected release** 2 minutes ahead and the resource broken (`not_found`) | Not checked before the release; after it, 3 × 404 → **MISSING** |
-| Early publish | Same, but `fix` before the release time | HEALTHY at the release time |
-| Student oversteps | In Browser B, open `/dashboard/admin/`, or POST a resource in `/docs` | 403 |
-
-`scripts/demo.sh modes` lists the fake-site resources and their current modes.
-
-## Showing the database
+### 2:55–3:40 Live 3: persistence
 
 ```bash
-scripts/demo.sh db
+scripts/demo.sh restart-db
 ```
 
-Opens Adminer through an SSH tunnel at **http://localhost:8081** (it listens only on the manager's
-loopback, never on the internet) and prints the login: System **PostgreSQL**, Server `postgres`,
-Username `edupulse`, Database `edupulse`, and the password. Ctrl-C closes the tunnel and stops it.
+It prints the data directory on the Volume and counts of users, resources, incidents, check
+results, emails and reports. It then replaces the Postgres container while polling the public site:
+`/health` goes 503 for about 10 s, and a new container ID appears. The same counts come back.
 
-Good tables to show: `resources` (state, failure count, `lease_owner` / `lease_until` while a check
-runs), `check_results` (every check), `incidents`, `notification_outbox` (`pending` → `sent`,
-`attempts`), `student_reports`.
+> State lives only in Postgres, and Postgres keeps its files on a DigitalOcean Volume, not in the
+> container. A new container on the same Volume has all the data. We also rebooted the whole
+> manager node: back in 52 s, nothing lost. If the Volume is missing, Postgres refuses to start
+> rather than starting empty.
+
+The handout has recovered by now: Browser B shows HEALTHY, and `scripts/demo.sh mail` would show
+the "is back" emails (skip if short on time).
+
+### 3:40–4:10 Live 4: monitoring and logs
+
+```bash
+scripts/demo.sh logs worker
+```
+
+> Every check is one JSON log line: resource, outcome, status, latency, new state. You can see the
+> 404s and the recovery from a minute ago.
+
+Window 6: DigitalOcean **Uptime** check on `/health` from three regions (with down, latency and
+certificate-expiry alerts) and **Alerts** for CPU, memory, disk and load on all three nodes.
+Backup: screenshots on the slide.
+
+### 4:10–5:20 Advanced features and completion plan (slides 3–4)
+
+| Feature | Status | Evidence / plan |
+|---|---|---|
+| Real-time updates (LISTEN/NOTIFY → WebSockets on every replica) | Done | Live 1 |
+| Notifications: transactional outbox + dispatcher | Done | Crash test: dispatcher killed after sending, before recording → resent once with the same Message-ID, receiver dropped the duplicate; no alert lost when the outbox insert fails |
+| Notifications: DigitalOcean Function + SendGrid | Planned | Dispatcher already posts to `MAIL_ENDPOINT`; switch it to the Function URL, key in the Function, not the cluster |
+| Security: Argon2 passwords, course roles, HTTPS (Let's Encrypt), Docker secrets | Done | Student gets 403 on admin actions; secrets never in the stack file |
+| Security: encrypted staff API tokens | State plainly whether it is done, planned with a date, or cut and why |
+
+Completion plan (dates up to Dec 5): Function + SendGrid; resource edit/delete for staff; student
+email opt-in; application metrics (checks per minute, failure rate, queue lag); load test with 2 vs
+4 workers; the experiment on which failures HTTP responses can and cannot distinguish.
+
+### 5:20–6:00 Failover evidence and limitations (slide 5)
+
+- Rehearsed on DigitalOcean: rolling update, worker killed mid-check, node powered off and back.
+  **943 public requests during these, 0 failed**; a dead node's work moved in 7 to 16 s.
+- Limitation: the manager runs Postgres and Nginx, so it is a single point of failure; accepted for
+  this scope, Volume and fast reboot mitigate it.
+
+## Local fallback (no cloud or no Wi-Fi)
+
+Core requirements may be shown locally. On the same laptop, before class:
+
+```bash
+docker compose up -d --build --wait
+```
+
+Then sign in at http://localhost/dashboard/ as the local demo admin, open **Administration**, create
+course `ece1779`, assign yourself **staff** on it, and register the same `a1-handout` resource. Only
+course members get emails, so locally the mailbox shows one email per member you assigned.
+(Tested: DOWN about 22 s after the break, email delivered, data intact after restarting Postgres.)
+
+| Live step | Local equivalent |
+|---|---|
+| Dashboard | http://localhost/dashboard/, demo admin `admin@edupulse.example.com` / `ece1779edupulse` (local only) |
+| Break / fix | `scripts/fake.sh set a1-handout not_found`, `scripts/fake.sh ok a1-handout` |
+| Emails | http://localhost:8003/messages |
+| Services | `docker compose ps` (Compose; Swarm evidence from the recording) |
+| Persistence | `docker compose restart postgres`, then the dashboard still shows everything |
+| Logs | `docker compose logs --tail 20 worker` |
+
+## Likely questions (everyone should be able to answer)
+
+| Question | Short answer |
+|---|---|
+| Why Docker Swarm, not Kubernetes? | Three small Droplets and one team-sized stack; Swarm gives replicas, rolling updates, secrets and placement with far less configuration. Trade-off: fewer features (no autoscaling). |
+| Why PostgreSQL as the job queue, not Redis? | Checks are low volume and must not be lost; Postgres already gives durability, `SKIP LOCKED` claims and `LISTEN/NOTIFY`. One fewer service. Trade-off: a throughput ceiling at large scale. |
+| How do two workers avoid checking the same resource? | They claim rows with `FOR UPDATE SKIP LOCKED` and a 30 s lease; a stale worker's result is discarded by a lease token. Tested: 0 duplicate checks. |
+| What if a worker dies mid-check? | Its lease expires after 30 s and another worker takes the resource. Shown on the cloud: recovered 37 s after the kill. |
+| What if the manager goes down? | Postgres and Nginx stop until it is back: our single point of failure. Data is on the Volume; a reboot took 52 s. |
+| Can an alert be lost or sent twice? | Not lost: written in the same transaction as the state change. Possibly sent twice after a crash, with the same Message-ID so the receiver can drop it. |
+| How do you avoid false alarms? | DOWN only after 3 consecutive failures; SUSPECT is rechecked sooner. A site failing every third request never alerted. |
+| How is a login wall detected? | A redirect to a login page usually ends in 200, so we look at where the redirect ended, not just the status code. |
+| What do the monitoring alerts tell you? | Node CPU, memory, disk and load; the uptime check covers the whole path (Nginx, API, database) and certificate expiry. |
+| What is left? | The completion plan above. |
 
 ## Afterwards
 
 ```bash
-scripts/demo.sh fix a1-handout && scripts/demo.sh fix dataset
+scripts/demo.sh fix a1-handout && scripts/demo.sh remove a1-handout && scripts/demo.sh mail-reset
 ```
-
-```bash
-scripts/demo.sh remove a1-handout && scripts/demo.sh remove dataset
-```
-
-```bash
-scripts/demo.sh mail-reset
-```
-
-## If something goes wrong
-
-| Symptom | Check |
-|---|---|
-| "Live updates disconnected" | Refresh the page; `scripts/demo.sh services` |
-| Register fails with 409 | That URL is already registered in the course: `scripts/demo.sh remove <name>` |
-| A state does not change | `scripts/demo.sh modes` (did the break apply?), Terminal 1 (`next check in`) |
-| A service below its replica count | `ssh root@138.197.173.188 docker service ps edupulse_<service>`, last column |
-| Network fails during the talk | Switch to the pre-recorded run of this script |
