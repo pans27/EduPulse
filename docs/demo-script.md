@@ -53,6 +53,16 @@ resource**: Name `Assignment 1 handout`, Resource URL `http://fake-site:8000/r/a
 interval `10`, Expected release empty → **Register**. Wait until it is HEALTHY in both browsers and
 "Live updates connected" shows under the heading.
 
+Then check that the two browsers are connected to **different API replicas**, so Live 1 shows the
+NOTIFY reaching more than one replica:
+
+```bash
+scripts/demo.sh ws
+```
+
+Two replicas should show 1 open WebSocket each. If one replica shows 2, reload Browser B (each new
+connection is load-balanced afresh) and run it again. Note which replica and node each browser is on.
+
 ## The 6 minutes
 
 | Time | Section | Rubric |
@@ -101,9 +111,10 @@ it DOWN, which avoids false alarms.
 
 Both browsers turn **SUSPECT**, then **DOWN** without a refresh; window 4 shows the open incident.
 
-> Advanced feature 1, real-time: the worker issues a Postgres NOTIFY when the state changes, every
-> API replica receives it and pushes the new state over WebSockets, so it does not matter which
-> replica a browser is connected to.
+> Advanced feature 1, real-time: the staff browser is on one API replica and the student browser on
+> another (checked with `scripts/demo.sh ws` before our turn). The worker issues one Postgres NOTIFY
+> when the state changes, every API replica receives it and pushes the new state over its own
+> WebSockets: different replicas, both updated.
 
 ```bash
 scripts/demo.sh mail

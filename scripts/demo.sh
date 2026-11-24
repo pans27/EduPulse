@@ -10,6 +10,7 @@
 #   scripts/demo.sh mail-reset                         # empty the mail sink before a demo
 #   scripts/demo.sh services                           # Swarm services: replicas, version, nodes
 #   scripts/demo.sh kill-api                           # kill one API container; Swarm replaces it
+#   scripts/demo.sh ws [minutes]                       # open dashboard WebSockets per API replica (default 120 min of logs)
 #   scripts/demo.sh restart-db                         # replace the Postgres container; show the data survived
 #   scripts/demo.sh logs [service] [minutes]           # recent JSON logs, readable (default: worker, 2 min)
 #   scripts/demo.sh db                                 # open Adminer (database viewer) via an SSH tunnel
@@ -136,6 +137,24 @@ PY
       (( seen_down && i > 1 )) && [[ $replicas == 3/3 ]] && { echo "  back to 3/3"; break; }
       sleep 2
     done ;;
+  ws)
+    # Which API replica each dashboard is connected to. Uvicorn logs "connection open" / "connection
+    # closed" for every WebSocket and Swarm prefixes each line with its task, so open minus closed per
+    # running replica = live connections (connections opened before the window are not counted).
+    minutes=${2:-120}
+    [[ $minutes =~ ^[0-9]+$ ]] || usage
+    on_manager_n "docker service ps edupulse_api -f desired-state=running --no-trunc --format '{{.Name}}.{{.ID}}@{{.Node}}'
+      echo ---; docker service logs --since ${minutes}m edupulse_api 2>&1 | grep -E 'connection (open|closed)' || true" \
+      | awk '
+        $0 == "---" { logs = 1; next }
+        !logs { split($0, p, /[.@]/); key = p[1] "." p[2] "." substr(p[3], 1, 12) "@" p[4]
+                order[++n] = key; label[key] = sprintf("api.%s on %s", p[2], p[4]); next }
+        /connection open/   { open[$1]++ }
+        /connection closed/ { if (open[$1] > 0) open[$1]-- }  # a close for a connection opened before the window
+        END {
+          for (i = 1; i <= n; i++) { k = order[i]; c = open[k] + 0
+            printf "  %-22s %d open WebSocket%s\n", label[k], c, (c == 1 ? "" : "s") }
+        }' | sort ;;
   db)
     # Adminer listens only on the manager's loopback; the tunnel brings it to this laptop.
     on_manager 'docker rm -f ep-adminer >/dev/null 2>&1; docker pull -q adminer:4.8.1 >/dev/null; docker run -d --rm --name ep-adminer --network edupulse_backend -p 127.0.0.1:8081:8080 adminer:4.8.1 >/dev/null'
