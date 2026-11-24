@@ -12,7 +12,7 @@
 #   scripts/demo.sh kill-api                           # kill one API container; Swarm replaces it
 #   scripts/demo.sh ws [minutes]                       # open dashboard WebSockets per API replica (default 120 min of logs)
 #   scripts/demo.sh restart-db                         # replace the Postgres container; show the data survived
-#   scripts/demo.sh logs [service] [minutes]           # recent JSON logs, readable (default: worker, 2 min)
+#   scripts/demo.sh logs [service] [minutes]           # recent JSON logs, readable (default: worker, 5 min)
 #   scripts/demo.sh db                                 # open Adminer (database viewer) via an SSH tunnel
 #   scripts/demo.sh remove <resource> [course]         # delete a registered resource (name or …/r/<resource>)
 #                                                      # (rehearsal reset; the API has no delete yet)
@@ -240,13 +240,14 @@ SQL
       echo; echo "rows differ:"; diff "${TMPDIR:-/tmp}/edupulse-before.txt" "${TMPDIR:-/tmp}/edupulse-after.txt" || true
     fi ;;
   logs)
-    service=${2:-worker} minutes=${3:-2}
+    service=${2:-worker} minutes=${3:-5}
     [[ $service =~ ^[a-z-]+$ && $minutes =~ ^[0-9]+$ ]] || usage
     # Resource ids in the logs are shown with their names.
     echo "SELECT id, name FROM resources;" | psql_manager > "${TMPDIR:-/tmp}/edupulse-names.txt"
     on_manager_n "docker service logs --raw --since ${minutes}m edupulse_$service 2>&1" | tail -200 \
       | python3 -c '
 import json, sys
+from datetime import datetime, timezone
 names = dict(line.strip().split(" | ", 1) for line in open(sys.argv[1]) if " | " in line)
 events = []
 for line in sys.stdin:
@@ -257,14 +258,44 @@ for line in sys.stdin:
     if isinstance(e, dict):
         events.append(e)
 events.sort(key=lambda e: e.get("ts", ""))  # replicas log separately; merge them by time
-for e in events:
-    ts, msg = e.pop("ts", "")[-8:], e.pop("msg", "")
+
+def local(ts):
+    try:
+        return datetime.fromisoformat(ts).replace(tzinfo=timezone.utc).astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return ts[-8:]
+
+def routine(e):  # a healthy check that changed nothing
+    return e.get("msg") == "checked" and e.get("outcome") == "ok" and e.get("state") == "HEALTHY"
+
+lines, run = [], []
+def flush():
+    if len(run) > 2:  # fold a run of routine checks into one line
+        first, last = local(run[0]["ts"]), local(run[-2]["ts"])
+        lines.append(f"  {first}  ... {len(run) - 1} healthy checks (200) until {last}")
+        run[:] = run[-1:]
+    for e in run:
+        lines.append(fmt(e))
+    run.clear()
+
+def fmt(e):
+    e = dict(e)
+    ts, msg = local(e.pop("ts", "")), e.pop("msg", "")
     for k in ("level", "service", "instance"):
         e.pop(k, None)
     if "resource" in e:
         e["resource"] = names.get(e["resource"], e["resource"][:8])
     fields = "  ".join(f"{k}={v}" for k, v in e.items() if v is not None)
-    print(f"  {ts}  {msg:14} {fields}")
+    return f"  {ts}  {msg:14} {fields}"
+
+for e in events:
+    if routine(e):
+        run.append(e)
+    else:
+        flush()
+        lines.append(fmt(e))
+flush()
+print("\n".join(lines))
 ' "${TMPDIR:-/tmp}/edupulse-names.txt" | tail -25 ;;
   remove)
     [[ $# -ge 2 ]] || { echo "usage: $0 remove <resource> [course]" >&2; exit 1; }
