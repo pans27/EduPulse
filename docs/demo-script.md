@@ -21,7 +21,7 @@ time goes to evidence for those, not to a product walkthrough.
 | 1 | Slides | |
 | 2 | Browser A (normal) | https://138-197-173-188.sslip.io signed in as **staff** (`vianne.liu@mail.utoronto.ca`), course **ECE1779** |
 | 3 | Browser B (private window) | Same site, signed in as **student** (`yuanliu0922@gmail.com`), course **ECE1779** |
-| 4 | Terminal, large font | `scripts/demo.sh watch` (states, open incidents, email outbox every 2 s) |
+| 4 | Terminal, large font | `scripts/demo.sh watch` (states, open incidents, email outbox and the last 8 checks, every 2 s) |
 | 5 | Terminal, large font | Commands below, in the repository root |
 | 6 | Browser tab | DigitalOcean console → Monitoring (Uptime check, Alerts), already signed in |
 | 7 | Backup | Short recordings of each live step, and screenshots, in case the cloud or Wi-Fi fails |

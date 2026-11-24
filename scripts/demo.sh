@@ -5,7 +5,7 @@
 #   scripts/demo.sh fix <resource>                     # back to ok
 #   scripts/demo.sh modes                              # fake-site resources and their current modes
 #   scripts/demo.sh status                             # resource states and open incidents
-#   scripts/demo.sh watch                              # status, refreshed every 2 s (Ctrl-C to stop)
+#   scripts/demo.sh watch                              # status + last 8 checks, refreshed every 2 s (Ctrl-C to stop)
 #   scripts/demo.sh mail                               # alert emails received by the mock mail sink
 #   scripts/demo.sh mail-reset                         # empty the mail sink before a demo
 #   scripts/demo.sh services                           # Swarm services: replicas, version, nodes
@@ -74,11 +74,47 @@ SELECT course_id, name, coalesce(state, 'awaiting first check'), consecutive_fai
        CASE WHEN next_check_at > now() THEN to_char(next_check_at - now(), 'MI:SS') ELSE 'due' END
 FROM resources ORDER BY course_id, name;
 \echo '== open incidents (resource | state | detail | opened)'
-SELECT r.name, i.state, i.description, to_char(i.opened_at, 'HH24:MI:SS')
+SELECT r.name, i.state, i.description, to_char(i.opened_at AT TIME ZONE 'America/Toronto', 'HH24:MI:SS')
 FROM incidents i JOIN resources r ON r.id = i.resource_id WHERE i.resolved_at IS NULL ORDER BY i.opened_at;
 \echo '== email outbox (kind | status | count)'
 SELECT kind, status, count(*) FROM notification_outbox GROUP BY kind, status ORDER BY kind, status;
 SQL
+}
+
+# The last checks from the worker logs, oldest first, so SUSPECT -> SUSPECT -> DOWN shows step by step.
+# check_results has no state column; the worker's "checked" log line has the state after each check.
+recent_checks() {
+  on_manager_n "docker exec \$(docker ps -q -f name=edupulse_postgres) psql -U edupulse -d edupulse -Atq -F ' | ' -c 'SELECT id, name FROM resources'
+    echo ---; docker service logs --raw --since 5m edupulse_worker 2>&1 | grep -E '\"msg\": \"(checked|state changed)\"' | tail -200" \
+    | python3 -c '
+import json, sys
+from datetime import datetime, timezone
+names, checks, logs = {}, [], False
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if line == "---":
+        logs = True
+    elif not logs:
+        if " | " in line:
+            rid, name = line.split(" | ", 1)
+            names[rid] = name
+    else:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get("resource") in names:  # skip resources since removed
+            checks.append(e)
+checks.sort(key=lambda e: e.get("ts", ""))
+print("== recent checks, oldest first (time | resource | outcome | http | state | failures)")
+for e in checks[-8:]:
+    ts = datetime.fromisoformat(e["ts"]).replace(tzinfo=timezone.utc).astimezone().strftime("%H:%M:%S")
+    status = e.get("status") or "-"
+    state = e.get("state")
+    if e.get("msg") == "state changed":  # mark transitions: HEALTHY -> SUSPECT, SUSPECT -> DOWN, ...
+        state = (e.get("from") or "new") + " -> " + str(state)
+    print(" | ".join(str(x) for x in (ts, names[e["resource"]], e.get("outcome"), status, state, e.get("failures"))))
+'
 }
 
 case "${1:-}" in
@@ -106,7 +142,11 @@ PY
     ;;
   status) status ;;
   watch)
-    while true; do clear; date '+%H:%M:%S'; status; sleep 2; done ;;
+    # Build each frame first, then clear and print it, so the screen doesn't flicker.
+    while true; do
+      frame=$(date '+%H:%M:%S'; status; recent_checks) || true  # one failed ssh shouldn't stop the watch
+      clear 2>/dev/null || true; echo "$frame"; sleep 2
+    done ;;
   mail)
     sink http://mail-sink:8000/messages > "${TMPDIR:-/tmp}/edupulse-mail.json"
     python3 - "${TMPDIR:-/tmp}/edupulse-mail.json" <<'PY'
