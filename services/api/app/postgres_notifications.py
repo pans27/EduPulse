@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 
 import asyncpg
 
@@ -25,11 +26,20 @@ class NotificationSubscription:
 
 
 class PostgresNotifications:
-    def __init__(self, database_url: str, channel: str, retry_delay: float = 2) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        channel: str,
+        retry_delay: float = 2,
+        heartbeat_interval: float = 10,
+        heartbeat_timeout: float = 5,
+    ) -> None:
         # Keep connection settings and a bounded queue per local subscriber.
         self.database_url = database_url
         self.channel = channel
         self.retry_delay = retry_delay
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_timeout = heartbeat_timeout
         self.subscribers: set[asyncio.Queue[str | None]] = set()
 
     def subscribe(self) -> NotificationSubscription:
@@ -54,6 +64,15 @@ class PostgresNotifications:
         if payload.strip():
             self._publish(payload)
 
+    async def _wait_for_disconnect(self, connection: asyncpg.Connection, disconnected: asyncio.Event) -> None:
+        # A connection can vanish without a close event, e.g. when the Postgres container is replaced
+        # behind a Swarm virtual IP, so ping it while idle; a failed or slow ping raises and reconnects.
+        while True:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(disconnected.wait(), self.heartbeat_interval)
+                return
+            await connection.fetchval("SELECT 1", timeout=self.heartbeat_timeout)
+
     async def run(self) -> None:
         # Subscribe, reconnect after connection loss, and release the connection on shutdown.
         while True:
@@ -65,9 +84,9 @@ class PostgresNotifications:
                 await connection.add_listener(self.channel, self._receive)
                 self._publish(None)
                 logger.info("Listening for PostgreSQL resource updates on %s", self.channel)
-                await disconnected.wait()
+                await self._wait_for_disconnect(connection, disconnected)
                 logger.warning("PostgreSQL resource listener connection closed")
-            except (asyncpg.PostgresError, OSError, TimeoutError) as error:
+            except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, TimeoutError) as error:
                 logger.warning("PostgreSQL resource listener disconnected (%s)", type(error).__name__)
             finally:
                 if connection is not None and not connection.is_closed():
