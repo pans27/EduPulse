@@ -216,6 +216,22 @@ The existing database was moved onto the Volume first; its `system_identifier` w
 
 While the database is down, the API's `/health` returns 503, so Swarm restarts every API replica. They come back once Postgres is healthy.
 
+### Failover rehearsal (DigitalOcean, 2026-11-23, images from `ccdc62e`)
+
+A laptop polled `https://…/health` 4 times a second through each scenario. A separate course with 6 fake-site resources (20 s interval, no members, so no emails) kept the workers busy; one of them answers in 8 s so a check can be interrupted mid-flight. The course was deleted afterwards.
+
+| Scenario | What happened | `/health` |
+|---|---|---|
+| Rolling update of the API (`service update --force`, start-first) | 3 replicas replaced one at a time in 38 s | 212/212 OK, slowest 0.36 s |
+| SIGKILL a worker 2 s into an 8 s check | Its lease expired 30 s after the claim; the other worker claimed the resource and recorded the result 37 s after the kill. Swarm restarted the killed task (exit 137) within about 6 s | not affected |
+| Hard power-off of node-1 (1 API, 1 worker, the dispatcher) | Swarm marked the node down 6 s after the Droplet went off; the worker and dispatcher were running on node-2 7 s later, the third API replica 9 s after that. All 6 resources kept their 20 s check rhythm (largest gap 28.8 s, the 8 s resource) | 507/507 OK, slowest 0.40 s |
+| Power node-1 back on | Rejoined as Ready 35 s after power-on. Swarm does not move tasks back by itself: everything stayed on node-2 until `service update --force` on the API and workers | 224/224 OK during the rebalance |
+
+Findings:
+- No request failed in any scenario. Postgres and Nginx are on the manager, which was not taken down; losing the manager is the single point of failure noted in the proposal.
+- Swarm's replica count keeps counting a down node's tasks until the node returns (it showed `worker 3/2`), so `docker node ls` and `docker service ps` are the reliable views during an outage.
+- After the rebalance both workers landed on node-1 again. Spreading them (`max_replicas_per_node: 1` with a stop-first update, which leases make safe) would keep one worker running through a single node failure instead of relying on rescheduling.
+
 ## 7. HTTPS
 
 Live at **https://138-197-173-188.sslip.io**. sslip.io is a free DNS service that resolves `138-197-173-188.sslip.io` to `138.197.173.188`, so Let's Encrypt can issue a real certificate without us buying a domain. A purchased domain can replace it later: point an A record at the manager and issue a new certificate with the same `--cert-name`.
