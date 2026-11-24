@@ -167,7 +167,7 @@ PY
     on_manager_n 'docker stack services edupulse --format "{{.Name}}|{{.Replicas}}|{{.Image}}" | sed "s#registry.digitalocean.com/edupulse/##" | awk -F"|" "{printf \"%-22s %-22s %s\n\", \$1, \$2, \$3}"
       echo; for s in api worker dispatcher; do printf "%-11s " $s; docker service ps edupulse_$s --filter desired-state=running --format "{{.Node}}" | sort | uniq -c | tr -s " \n" " "; echo; done' ;;
   kill-api)
-    on_service_node api 'c=$(docker ps -q -f name=edupulse_api | head -1); docker kill "$c" >/dev/null && echo "killed API container ${c:0:12} on $(hostname) at $(date +%T)"'
+    on_service_node api 'set -- $(docker ps -f name=edupulse_api --format "{{.ID}} {{.Names}}" | head -1); r=${2#edupulse_}; docker kill "$1" >/dev/null && echo "killed ${r%.*} (container ${1:0:12}) on $(hostname) at $(TZ=America/Toronto date +%T)"'
     # Watch the replica count fall and recover while the public site keeps answering.
     seen_down=0
     for i in $(seq 1 40); do
