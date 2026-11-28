@@ -111,7 +111,7 @@ class PostgresRegistry:
             if resource_input.api_token is not None:
                 ciphertext = self._encrypt_token(resource.id, resource.url, resource_input.api_token)
                 session.add(CredentialRow(resource_id=resource.id, token_ciphertext=ciphertext))
-            await self._notify(session, resource.id)
+            await self.notify_change(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
 
     async def edit(self, course_id: str, resource_id: UUID, resource_input: ResourcePatch) -> Resource:
@@ -156,7 +156,7 @@ class PostgresRegistry:
                     # Fence stale results while keeping the lease deadline to prevent overlapping checks.
                     resource.lease_token = None
                 await self._flush_resource(session)
-                await self._notify(session, resource.id)
+                await self.notify_change(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
 
     def _encrypt_token(self, resource_id: UUID, url: str, token: SecretStr) -> bytes:
@@ -177,7 +177,7 @@ class PostgresRegistry:
             )
             if deleted is None:
                 raise HTTPException(404, "Resource not found")
-            await self._notify(session, f"course:{course_id}")
+            await self.notify_change(session, f"course:{course_id}")
 
     async def report(self, course_id: str, resource_id: UUID, report_input: ReportCreate) -> StudentReport:
         # Persist the report and make the resource due in the same transaction.
@@ -195,7 +195,7 @@ class PostgresRegistry:
             report = StudentReportRow(resource_id=resource_id, description=report_input.description)
             session.add(report)
             await session.flush()
-            await self._notify(session, resource_id)
+            await self.notify_change(session, resource_id)
             return StudentReport.model_validate(report, from_attributes=True)
 
     async def metrics(self) -> dict[str, int]:
@@ -219,7 +219,7 @@ class PostgresRegistry:
                 raise HTTPException(409, "This URL is already registered for this course") from error
             raise
 
-    async def _notify(self, session: AsyncSession, payload: UUID | str) -> None:
+    async def notify_change(self, session: AsyncSession, payload: UUID | str) -> None:
         # Publish an invalidation in the same transaction as the write.
         if self.notify_channel:
-            await session.execute(select(func.pg_notify(self.notify_channel, str(payload))))
+            await session.execute(select(func.pgnotify_change(self.notify_channel, str(payload))))

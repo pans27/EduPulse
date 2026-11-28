@@ -1,10 +1,11 @@
 """Global admin actions for courses and course memberships."""
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, StringConstraints, model_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +34,15 @@ class RoleAssignment(BaseModel):
         if self.role != "admin" and self.course_id is None:
             raise ValueError("Select a course for a staff or student role")
         return self
+
+
+class CourseRole(BaseModel):
+    role: Literal["staff", "student"]
+
+
+class CourseMember(CourseRole):
+    user_id: UUID
+    email: str
 
 
 async def admin_sessions(request: Request) -> async_sessionmaker[AsyncSession]:
@@ -87,3 +97,49 @@ async def assign_user_role(assignment: RoleAssignment, request: Request) -> None
                 set_={"role": assignment.role},
             )
         )
+
+
+@router.get("/courses/{course_id}/members")
+async def list_course_members(course_id: str, request: Request) -> list[CourseMember]:
+    # List the accounts assigned to the selected course.
+    sessions = await admin_sessions(request)
+    async with sessions() as session:
+        if await session.get(CourseRow, course_id) is None:
+            raise HTTPException(404, "Course not found")
+        rows = await session.execute(
+            select(CourseMemberRow.user_id, UserRow.email, CourseMemberRow.role)
+            .join(UserRow, UserRow.id == CourseMemberRow.user_id)
+            .where(CourseMemberRow.course_id == course_id)
+            .order_by(UserRow.email)
+        )
+        return [CourseMember.model_validate(row, from_attributes=True) for row in rows]
+
+
+@router.patch("/courses/{course_id}/members/{user_id}", status_code=204)
+async def change_course_role(course_id: str, user_id: UUID, data: CourseRole, request: Request) -> None:
+    # Update an existing membership without granting global access.
+    sessions = await admin_sessions(request)
+    async with sessions.begin() as session:
+        changed = await session.scalar(
+            update(CourseMemberRow)
+            .where(CourseMemberRow.course_id == course_id, CourseMemberRow.user_id == user_id)
+            .values(role=data.role)
+            .returning(CourseMemberRow.user_id)
+        )
+        if changed is None:
+            raise HTTPException(404, "Course membership not found")
+
+
+@router.delete("/courses/{course_id}/members/{user_id}", status_code=204)
+async def remove_course_member(course_id: str, user_id: UUID, request: Request) -> None:
+    # Delete only the membership and prompt live clients to recheck access.
+    sessions = await admin_sessions(request)
+    async with sessions.begin() as session:
+        removed = await session.scalar(
+            delete(CourseMemberRow)
+            .where(CourseMemberRow.course_id == course_id, CourseMemberRow.user_id == user_id)
+            .returning(CourseMemberRow.user_id)
+        )
+        if removed is None:
+            raise HTTPException(404, "Course membership not found")
+        await request.app.state.registry.notify_change(session, f"course:{course_id}")

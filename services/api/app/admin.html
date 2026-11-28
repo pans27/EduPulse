@@ -6,7 +6,7 @@
   <title>Administration | EduPulse</title>
   <link rel="stylesheet" href="/dashboard/styles.css">
   <script src="/dashboard/api.js" defer></script>
-  <script src="/dashboard/admin.js" defer></script>
+  <script src="/dashboard/admin.js?v=course-members" defer></script>
 </head>
 <body>
   <header>
@@ -52,6 +52,16 @@
         <p id="course-notice" class="feedback" role="status" hidden></p>
       </section>
     </div>
+    <section class="panel admin-metrics" aria-labelledby="members-title">
+      <h2 id="members-title">Manage course members</h2>
+      <fieldset>
+        <label>Course
+          <select id="members-course" disabled><option value="">Loading courses…</option></select>
+        </label>
+      </fieldset>
+      <p id="members-notice" class="feedback" role="status" hidden></p>
+      <ul id="course-members" aria-label="Course members"></ul>
+    </section>
     <p id="metrics" class="muted admin-metrics" hidden></p>
   </main>
 </body>

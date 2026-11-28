@@ -207,6 +207,41 @@ class DatabaseRoutesTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.session.scalar.assert_not_called()
 
+    def test_course_membership_management_requires_global_admin(self):
+        members = "/api/admin/courses/ece1779/members"
+        member = f"{members}/{uuid4()}"
+        self.assertEqual(self.client.get(members).status_code, 403)
+        self.assertEqual(self.client.patch(member, json={"role": "student"}).status_code, 403)
+        self.assertEqual(self.client.delete(member).status_code, 403)
+        self.session.get.assert_not_called()
+        self.session.scalar.assert_not_called()
+
+    def test_admin_can_list_change_and_remove_course_members(self):
+        self.account.return_value = Principal(user_id=uuid4(), courses={}, is_admin=True)
+        user_id = uuid4()
+        members = "/api/admin/courses/ece1779/members"
+        member = f"{members}/{user_id}"
+        self.session.get.return_value = CourseRow(id="ece1779", name="Test Course")
+        self.session.execute.return_value = [
+            MagicMock(user_id=user_id, email="student@example.com", role="student"),
+        ]
+        self.assertEqual(self.client.get(members).json(), [
+            {"user_id": str(user_id), "email": "student@example.com", "role": "student"},
+        ])
+        self.session.scalar.return_value = user_id
+        self.assertEqual(self.client.patch(member, json={"role": "admin"}).status_code, 422)
+        self.assertEqual(self.client.patch(member, json={"role": "staff"}).status_code, 204)
+        params = self.session.scalar.await_args.args[0].compile().params.values()
+        for value in ("ece1779", user_id, "staff"):
+            self.assertIn(value, params)
+        self.assertEqual(self.client.delete(member).status_code, 204)
+        statement = self.session.scalar.await_args.args[0]
+        self.assertEqual(statement.table.name, CourseMemberRow.__tablename__)
+        self.assertEqual(set(statement.compile().params.values()), {"ece1779", user_id})
+        self.session.scalar.return_value = None
+        self.assertEqual(self.client.patch(member, json={"role": "student"}).status_code, 404)
+        self.assertEqual(self.client.delete(member).status_code, 404)
+
     def test_admin_can_open_administration_and_list_unassigned_courses(self):
         # Restrict Administration to admins and list courses outside their memberships.
         self.assertEqual(self.client.get("/dashboard/admin/").status_code, 403)
