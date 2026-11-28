@@ -3,12 +3,15 @@ const course = byId("course");
 const register = byId("register");
 const report = byId("report");
 const dialog = byId("report-dialog");
+const edit = byId("edit");
+const editDialog = byId("edit-dialog");
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 let socket;
 let retry;
 let selection = 0;
 let requestVersion = 0;
 let reportPath;
+let editing;
 let accountSession;
 
 // Show feedback after a dashboard action.
@@ -51,8 +54,93 @@ function renderResources(resources) {
     button.textContent = "Report issue";
     button.setAttribute("aria-label", `Report an issue with ${resource.name}`);
     button.addEventListener("click", () => openReport(resource));
-    row.append(heading, details, button);
+    const actions = document.createElement("div");
+    actions.className = "resource-actions";
+    actions.append(button);
+    if (accountSession.courses[resource.course_id] === "staff") {
+      actions.append(
+        resourceButton("Edit", `Edit ${resource.name}`, () => openEdit(resource)),
+        resourceButton("Delete", `Delete ${resource.name}`, () => deleteResource(resource), "danger"),
+      );
+    }
+    row.append(heading, details, actions);
     list.append(row);
+  }
+}
+
+function resourceButton(text, label, onClick, className) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text;
+  button.setAttribute("aria-label", label);
+  if (className) button.className = className;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function resourcePath(resource) {
+  return `/api/courses/${encodeURIComponent(resource.course_id)}/resources/${encodeURIComponent(resource.id)}`;
+}
+
+// A datetime-local input takes local time without a zone: "2026-12-01T09:30".
+function localInputValue(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+// Open the edit form filled with the resource's current values.
+function openEdit(resource) {
+  editing = resource;
+  edit.reset();
+  byId("edit-error").hidden = true;
+  edit.elements.name.value = resource.name;
+  edit.elements.url.value = resource.url;
+  edit.elements.interval.value = resource.check_interval_seconds;
+  edit.elements.release.value = localInputValue(resource.release_at);
+  editDialog.showModal();
+}
+
+// Send only the fields that changed; a new URL restarts the resource's checks.
+async function saveEdit(event) {
+  event.preventDefault();
+  const fields = new FormData(edit);
+  const release = fields.get("release");
+  const changes = {};
+  if (fields.get("name").trim() !== editing.name) changes.name = fields.get("name");
+  if (fields.get("url") !== editing.url) changes.url = fields.get("url");
+  if (Number(fields.get("interval")) !== editing.check_interval_seconds) changes.check_interval_seconds = Number(fields.get("interval"));
+  if (release !== localInputValue(editing.release_at)) changes.release_at = release ? new Date(release).toISOString() : null;
+  if (!Object.keys(changes).length) {
+    editDialog.close();
+    return;
+  }
+  const fieldset = byId("edit-fields");
+  const errorMessage = byId("edit-error");
+  fieldset.disabled = true;
+  errorMessage.hidden = true;
+  try {
+    await api(resourcePath(editing), changes, "PATCH");
+    editDialog.close();
+    notice(changes.url ? "Resource updated. The new URL will be checked now." : "Resource updated.");
+    void refreshResources();
+  } catch (error) {
+    errorMessage.textContent = error.message;
+    errorMessage.hidden = false;
+  } finally {
+    fieldset.disabled = false;
+  }
+}
+
+// Delete after confirmation; the history goes with it, so say so.
+async function deleteResource(resource) {
+  if (!confirm(`Delete "${resource.name}"?\n\nIts check history, incidents and student reports are deleted too. This cannot be undone.`)) return;
+  try {
+    await api(resourcePath(resource), undefined, "DELETE");
+    notice(`Deleted "${resource.name}".`);
+    void refreshResources();
+  } catch (error) {
+    notice(error.message, true);
   }
 }
 
@@ -242,6 +330,11 @@ byId("refresh").addEventListener("click", () => {
 register.addEventListener("submit", registerResource);
 report.addEventListener("submit", submitReport);
 byId("cancel").addEventListener("click", () => dialog.close());
+edit.addEventListener("submit", saveEdit);
+byId("edit-cancel").addEventListener("click", () => editDialog.close());
+editDialog.addEventListener("cancel", (event) => {
+  if (byId("edit-fields").disabled) event.preventDefault();
+});
 dialog.addEventListener("cancel", (event) => {
   if (byId("cancel").disabled) event.preventDefault();
 });
