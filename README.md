@@ -81,4 +81,5 @@ Pop-Location
 | `services/worker` | Byan | Check worker (the dispatcher reuses this image) |
 | `services/fake-site` | Yuan | Controllable test target |
 | `infra/` | Yuan | Swarm stack, Nginx, deployment scripts |
+| `functions/` | Yuan | DigitalOcean Function that sends alert emails through SendGrid |
 | `docs/` | All | Proposal and report material |

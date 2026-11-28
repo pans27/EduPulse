@@ -1,0 +1,18 @@
+# DigitalOcean Functions project for EduPulse email. Deploy with `doctl serverless deploy functions`
+# (see functions/README.md). The dollar-brace values are read from functions/.env (not committed);
+# doctl substitutes them even inside comments, so none appear here.
+packages:
+  - name: edupulse
+    functions:
+      - name: send
+        runtime: python:3.11
+        # A public web endpoint: the Function checks the dispatcher's bearer token itself.
+        web: true
+        environment:
+          SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+          MAIL_TOKEN: ${MAIL_TOKEN}
+          MAIL_FROM: ${MAIL_FROM}
+          MAIL_FROM_NAME: EduPulse
+        limits:
+          timeout: 8000  # ms; the SendGrid call itself is capped at 6 s
+          memory: 128    # MB
