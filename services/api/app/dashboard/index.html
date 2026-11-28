@@ -71,5 +71,19 @@
       <div class="actions"><button type="button" id="cancel">Cancel</button><button type="submit" class="primary">Submit report</button></div>
     </form>
   </dialog>
+  <dialog id="edit-dialog" aria-labelledby="edit-title">
+    <form id="edit">
+      <h2 id="edit-title">Edit resource</h2>
+      <fieldset id="edit-fields">
+        <label>Name<input name="name" required maxlength="120"></label>
+        <label>Resource URL<input name="url" type="url" required></label>
+        <p class="muted hint">Changing the URL clears the current state and checks the new URL now.</p>
+        <label>Check interval in seconds<input name="interval" type="number" min="1" required></label>
+        <label>Expected release (optional)<input name="release" type="datetime-local"></label>
+        <p id="edit-error" role="alert" hidden></p>
+        <div class="actions"><button type="button" id="edit-cancel">Cancel</button><button type="submit" class="primary">Save</button></div>
+      </fieldset>
+    </form>
+  </dialog>
 </body>
 </html>

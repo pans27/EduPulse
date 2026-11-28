@@ -16,12 +16,17 @@ router = APIRouter(prefix="/api")
 async def wait_for_course_update(
     notification_queue: asyncio.Queue[str | None], registry: PostgresRegistry, course_id: str
 ) -> None:
-    # Wait for a committed update to this course or for a full resync signal.
+    # Wait for a committed update to this course or for a full resync signal. A payload is a
+    # resource ID, or "course:<id>" after a delete, when the resource row no longer exists.
     while True:
         resource_id = await notification_queue.get()
         notification_queue.task_done()
         if resource_id is None:
             return
+        if resource_id.startswith("course:"):
+            if resource_id.removeprefix("course:") == course_id:
+                return
+            continue
         try:
             resource_uuid = UUID(resource_id)
         except ValueError:

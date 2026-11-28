@@ -3,11 +3,15 @@
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from datetime import timedelta
+
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, StudentReport
+from .api_models import (
+    Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, ResourceUpdate, StudentReport,
+)
 from .registry_models import CourseRow, ResourceRow, StudentReportRow
 
 
@@ -77,16 +81,78 @@ class PostgresRegistry:
                 next_check_at=max(now, resource_input.release_at or now),
             )
             session.add(resource)
-            try:
-                await session.flush()
-            except IntegrityError as error:
-                # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
-                database_error = error.orig.__cause__
-                if getattr(database_error, "constraint_name", None) == "uq_resources_course_url":
-                    raise HTTPException(409, "This URL is already registered for this course") from error
-                raise
+            await self._flush_unique_url(session)
             await self._notify(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
+
+    async def update(self, course_id: str, resource_id: UUID, changes: ResourceUpdate) -> Resource:
+        # Apply a partial edit and reschedule the next check in one transaction.
+        async with self.sessions.begin() as session:
+            # FOR UPDATE waits for a worker that is saving a result for this resource right now.
+            resource = await session.scalar(
+                select(ResourceRow)
+                .where(ResourceRow.course_id == course_id, ResourceRow.id == resource_id)
+                .with_for_update()
+            )
+            if resource is None:
+                raise HTTPException(404, "Resource not found")
+            now = (await session.execute(select(func.now()))).scalar_one()
+            fields = changes.model_fields_set
+            due, reschedule = resource.next_check_at, False
+
+            if "name" in fields:
+                resource.name = changes.name
+            if "url" in fields and str(changes.url) != resource.url:
+                resource.url = str(changes.url)
+                # The state, failure count and open incident describe the old URL: start over.
+                # Clearing the lease makes a worker that is checking the old URL discard its result.
+                resource.state = None
+                resource.consecutive_failures = 0
+                resource.recheck_requested = False
+                resource.lease_owner = resource.lease_until = resource.lease_token = None
+                await session.execute(
+                    text("UPDATE incidents SET resolved_at = now() WHERE resource_id = :id AND resolved_at IS NULL"),
+                    {"id": resource_id},
+                )
+                due, reschedule = now, True
+            if "release_at" in fields and changes.release_at != resource.release_at:
+                resource.release_at = changes.release_at
+                due, reschedule = now, True
+            if "check_interval_seconds" in fields:
+                resource.check_interval_seconds = changes.check_interval_seconds
+                # A shorter interval takes effect now instead of after the old, longer wait.
+                due, reschedule = min(due, now + timedelta(seconds=changes.check_interval_seconds)), True
+            if reschedule:
+                # Never before the release time (the same rule as register).
+                resource.next_check_at = max(due, resource.release_at or now)
+
+            await self._flush_unique_url(session)
+            await self._notify(session, resource.id)
+            return Resource.model_validate(resource, from_attributes=True)
+
+    async def delete(self, course_id: str, resource_id: UUID) -> None:
+        # Delete a resource; its check results, incidents, reports and queued emails cascade.
+        async with self.sessions.begin() as session:
+            deleted = await session.scalar(
+                delete(ResourceRow)
+                .where(ResourceRow.course_id == course_id, ResourceRow.id == resource_id)
+                .returning(ResourceRow.id)
+            )
+            if deleted is None:
+                raise HTTPException(404, "Resource not found")
+            # The row is gone, so listeners cannot look its course up: name the course instead.
+            if self.notify_channel:
+                await session.execute(select(func.pg_notify(self.notify_channel, f"course:{course_id}")))
+
+    async def _flush_unique_url(self, session: AsyncSession) -> None:
+        try:
+            await session.flush()
+        except IntegrityError as error:
+            # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
+            database_error = error.orig.__cause__
+            if getattr(database_error, "constraint_name", None) == "uq_resources_course_url":
+                raise HTTPException(409, "This URL is already registered for this course") from error
+            raise
 
     async def report(self, course_id: str, resource_id: UUID, report_input: ReportCreate) -> StudentReport:
         # Persist the report and make the resource due in the same transaction.

@@ -4,13 +4,20 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
-    AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, field_validator,
+    AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, field_validator, model_validator,
 )
 
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 ReportText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 HealthState = Literal["HEALTHY", "DEGRADED", "SUSPECT", "DOWN", "AUTH_REQUIRED", "MISSING"]
+
+
+def reject_credentials(url: HttpUrl | None) -> HttpUrl | None:
+    # Reject URLs that embed a username or password.
+    if url is not None and (url.username is not None or url.password is not None):
+        raise ValueError("URL must omit credentials")
+    return url
 
 
 class Course(BaseModel):
@@ -30,10 +37,32 @@ class ResourceCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def url_without_credentials(cls, url: HttpUrl) -> HttpUrl:
-        # Reject URLs that embed a username or password.
-        if url.username is not None or url.password is not None:
-            raise ValueError("URL must omit credentials")
-        return url
+        return reject_credentials(url)
+
+
+class ResourceUpdate(BaseModel):
+    # A partial edit: only the fields sent are changed. release_at may be set to null to clear it;
+    # the other fields cannot be null.
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name | None = None
+    url: HttpUrl | None = None
+    check_interval_seconds: int | None = Field(default=None, ge=1, le=2_147_483_647)
+    release_at: AwareDatetime | None = None
+
+    @field_validator("url")
+    @classmethod
+    def url_without_credentials(cls, url: HttpUrl | None) -> HttpUrl | None:
+        return reject_credentials(url)
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "ResourceUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Send at least one field to change")
+        for name in ("name", "url", "check_interval_seconds"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
 
 
 class Resource(ResourceCreate):

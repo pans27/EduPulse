@@ -30,6 +30,11 @@ class ResourceRow(RegistryBase):
     next_check_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     state: Mapped[str | None] = mapped_column(String(20))
     recheck_requested: Mapped[bool] = mapped_column(server_default=false())
+    # Written by the worker; the API only resets them when a resource's URL is edited.
+    consecutive_failures: Mapped[int] = mapped_column(server_default="0")
+    lease_owner: Mapped[str | None] = mapped_column(String(120))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[UUID | None]
 
 
 class StudentReportRow(RegistryBase):
