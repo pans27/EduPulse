@@ -43,7 +43,7 @@ def upgrade() -> None:
     op.create_index("ix_sessions_expires_at", "sessions", ["expires_at"])
 
     # Seed the known demo credential only when the local migration opts in.
-    if os.getenv("EDUPULSE_SEED_DEMO_ADMIN") == "1":
+    if os.getenv("EDUPULSE_LOCAL_TESTING") == "1":
         op.bulk_insert(users, [{
             "email": DEMO_ADMIN_EMAIL,
             "password_hash": DEMO_ADMIN_HASH,

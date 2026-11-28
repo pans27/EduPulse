@@ -150,6 +150,8 @@ function openEdit(resource) {
     interval: String(resource.check_interval_seconds), release: localRelease,
   };
   for (const [name, value] of Object.entries(initial)) editForm.elements.namedItem(name).value = value;
+  editForm.elements.namedItem("api_token").value = "";
+  editForm.elements.namedItem("remove_api_token").checked = false;
   editingResource = { resource, initial };
   byId("edit-error").hidden = true;
   editDialog.showModal();
@@ -166,6 +168,11 @@ async function editResource(event) {
   errorMessage.hidden = true;
   try {
     const changes = {};
+    if (fields.api_token && fields.remove_api_token) {
+      throw new Error("Enter a replacement token or select removal.");
+    }
+    if (fields.api_token) changes.api_token = fields.api_token;
+    if (fields.remove_api_token) changes.api_token = null;
     if (fields.name !== initial.name) changes.name = fields.name;
     if (fields.url !== initial.url) changes.url = fields.url;
     if (fields.interval !== initial.interval) changes.check_interval_seconds = Number(fields.interval);
@@ -215,6 +222,7 @@ async function registerResource(event) {
       url: fields.get("url"),
       check_interval_seconds: Number(fields.get("interval")),
       release_at: release ? new Date(release).toISOString() : null,
+      ...(fields.get("api_token") ? { api_token: fields.get("api_token") } : {}),
     });
     register.reset();
     if (selectedCourse === course.value) void refreshResources();
@@ -325,6 +333,9 @@ byId("refresh").addEventListener("click", () => {
 register.addEventListener("submit", registerResource);
 editForm.addEventListener("submit", editResource);
 byId("cancel-edit").addEventListener("click", () => editDialog.close());
+editDialog.addEventListener("close", () => {
+  editForm.elements.namedItem("api_token").value = "";
+});
 editDialog.addEventListener("cancel", (event) => {
   if (byId("edit-fields").disabled) event.preventDefault();
 });

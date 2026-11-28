@@ -34,6 +34,13 @@ class ResourceRow(RegistryBase):
     lease_token: Mapped[UUID | None]
 
 
+class CredentialRow(RegistryBase):
+    __tablename__ = "credentials"
+
+    resource_id: Mapped[UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), primary_key=True)
+    token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class StudentReportRow(RegistryBase):
     __tablename__ = "student_reports"
 

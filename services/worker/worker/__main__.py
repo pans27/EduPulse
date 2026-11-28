@@ -11,11 +11,13 @@ import signal
 import socket
 
 import asyncpg
+from cryptography.fernet import Fernet, InvalidToken
 
 from . import logs, store
 from .leases import work_deadline
 from .checker import check, new_client
-from .classify import classify
+from .classify import Observation, classify
+from .resource_credentials import decrypt_token, load_cipher
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 NOTIFY_CHANNEL = os.environ.get("EDUPULSE_RESOURCE_NOTIFY_CHANNEL", "resource_updates") or None
@@ -31,8 +33,21 @@ CHECK_DEADLINE_SECONDS = work_deadline(LEASE_SECONDS, name="WORKER_LEASE_SECONDS
 log = logs.setup("worker", WORKER_ID)
 
 
-async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
-    observation = await check(client, item.url, CHECK_DEADLINE_SECONDS)
+async def check_one(pool: asyncpg.Pool, client, item: store.Claim, cipher: Fernet | None = None) -> None:
+    # Fail the check without sending a request if the encrypted credential is unusable.
+    try:
+        token = None if item.token_ciphertext is None else decrypt_token(
+            cipher, item.resource_id, item.url, item.token_ciphertext
+        )
+    except (InvalidToken, UnicodeDecodeError):
+        observation = Observation(item.url, error="credential_unavailable")
+    else:
+        if token is None:
+            observation = await check(client, item.url, CHECK_DEADLINE_SECONDS)
+        else:
+            # Isolate cookies and avoid environment proxies during authenticated checks.
+            async with new_client(trust_env=False) as authenticated_client:
+                observation = await check(authenticated_client, item.url, CHECK_DEADLINE_SECONDS, api_token=token)
     outcome = classify(observation)
     recorded = await store.record(pool, item, observation, outcome, NOTIFY_CHANNEL)
     fields = {"resource": str(item.resource_id), "outcome": outcome, "status": observation.status,
@@ -49,6 +64,7 @@ async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
 
 
 async def run(stop: asyncio.Event) -> None:
+    cipher = load_cipher()
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=BATCH + 1)
     log.info("started", extra={"fields": {"batch": BATCH, "lease_seconds": LEASE_SECONDS}})
     async with new_client() as client:
@@ -62,7 +78,7 @@ async def run(stop: asyncio.Event) -> None:
                     claimed = []
                 if claimed:
                     results = await asyncio.gather(
-                        *(check_one(pool, client, item) for item in claimed), return_exceptions=True
+                        *(check_one(pool, client, item, cipher) for item in claimed), return_exceptions=True
                     )
                     for item, result in zip(claimed, results):
                         if isinstance(result, Exception):

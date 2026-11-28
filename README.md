@@ -4,10 +4,11 @@ ECE1779 final project: course resource monitoring. See [docs/proposal.md](docs/p
 
 ## Local quickstart
 
-Requires Docker Desktop. From the repository root, copy `.env.example` to `.env` if you haven’t already, then start the local stack. Compose applies the PostgreSQL migrations before starting the API.
+Requires Docker Desktop and Python. From the repository root, copy `.env.example` to `.env` if needed and generate the local resource token key once. Keep the same key across restarts. Compose applies the PostgreSQL migrations before starting the API.
 
 ```sh
 cp .env.example .env
+python -c "from pathlib import Path; import base64, secrets; key = Path('secrets/resource_token_key'); key.parent.mkdir(exist_ok=True); key.exists() or key.open('xb').write(base64.urlsafe_b64encode(secrets.token_bytes(32)))"
 docker compose up -d --build --wait
 ```
 
@@ -25,10 +26,10 @@ Compose binds published ports to loopback. The ignored `docker-compose.local.yml
 |---|---|
 | `GET /live` | Confirms FastAPI is running. Used by the API container healthcheck. |
 | `GET /health` | Checks PostgreSQL connectivity and returns 503 if it is unavailable. |
-| `POST /api/courses/{course_id}/resources` | Registers an HTTP(S) resource with a name, check interval in seconds, and optional timezone-aware release time. |
+| `POST /api/courses/{course_id}/resources` | Registers an HTTP(S) resource with a name, check interval in seconds, optional timezone-aware release time, and optional bearer token. |
 | `GET /api/courses/{course_id}/resources` | Lists resources and their current state. A new resource has a null state pending its first result. |
 | `GET /api/courses/{course_id}/resources/{resource_id}` | Reads a single resource within its course. |
-| `PATCH /api/courses/{course_id}/resources/{resource_id}` | Lets course staff edit the name, URL, check interval, or release time. |
+| `PATCH /api/courses/{course_id}/resources/{resource_id}` | Lets course staff edit settings, replace a bearer token, or clear it with `"api_token": null`. |
 | `DELETE /api/courses/{course_id}/resources/{resource_id}` | Lets course staff permanently delete a resource and its checks, incidents, reports, and queued alerts. |
 | `POST /api/courses/{course_id}/resources/{resource_id}/reports` | Records a description and makes the resource immediately due. |
 | `WS /api/courses/{course_id}/ws` | Sends a `course.snapshot` on connect and when a resource is registered or reported. Reconnecting reads the current snapshot. |
@@ -38,7 +39,7 @@ Compose binds published ports to loopback. The ignored `docker-compose.local.yml
 
 Local and deployed APIs require PostgreSQL-backed accounts. Login issues a random session cookie and stores its hash in PostgreSQL. Sessions expire eight hours after sign-in, and logout revokes the session across API replicas. Staff can register resources in their assigned courses. Staff and students can view course resources, receive WebSocket updates, and submit reports. Global metrics require an admin account.
 
-Local Compose sets `EDUPULSE_SEED_DEMO_ADMIN=1`. On a fresh database, the auth migration seeds `admin@edupulse.example.com` with password `ece1779edupulse`. Users can register with an email address on the dashboard. Administrators can open the separate [Administration page](http://localhost/dashboard/admin/) to create courses and assign users by email. Select a course for staff or students. The administrator role applies across EduPulse.
+Local Compose sets `EDUPULSE_LOCAL_TESTING=1` to enable demo admin seeding, session cookies over loopback HTTP, and HTTP bearer-token checks to the internal fake site. Swarm leaves this flag unset. On a fresh database, the auth migration seeds `admin@edupulse.example.com` with password `ece1779edupulse`. Users can register with an email address on the dashboard. Administrators can open the separate [Administration page](http://localhost/dashboard/admin/) to create courses and assign users by email. Select a course for staff or students. The administrator role applies across EduPulse.
 
 Use addresses such as `student@example.com` for test accounts. Email validation rejects special-use domains such as `.local` and `.test`.
 
@@ -63,6 +64,18 @@ The cloud stack leaves demo seeding disabled. The entrypoint reads the database 
 Course updates use `EDUPULSE_RESOURCE_NOTIFY_CHANNEL` with a plain-text resource UUID. The API refreshes WebSocket snapshots from committed PostgreSQL rows. The worker currently checks database connectivity while the monitoring implementation is pending.
 
 Use HTTPS for secure session cookies on Swarm. Local Compose allows cookies on loopback HTTP.
+
+## Bearer tokens for monitored resources
+
+Course staff can supply a token when registering or editing a resource on a service that permits this use. EduPulse encrypts it with Fernet before writing it to PostgreSQL. The token is write-only, and the worker sends it as `Authorization: Bearer <token>` over HTTPS. Use the final URL because authenticated checks stop at redirects. Changing the URL clears the saved token unless the same patch supplies a replacement.
+
+On the Swarm manager, create the `resource_token_key` Docker secret once before deploying a stack that includes resource authentication. Keep a secure backup of the key for database restores.
+
+```sh
+openssl rand -base64 32 | tr '+/' '-_' | docker secret create resource_token_key -
+```
+
+For local testing, start Compose using the quickstart and register `http://fake-site:8000/r/token-protected` in the dashboard with the fixture token `demo-resource-token`. The worker should report **HEALTHY** after a successful check. Use the editor to replace it with an incorrect token and confirm the worker reports **AUTH_REQUIRED** after another check. Local Compose permits HTTP bearer checks only to the internal fake site.
 
 ## API tests
 

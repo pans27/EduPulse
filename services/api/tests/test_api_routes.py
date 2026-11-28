@@ -5,13 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import asyncpg
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import Principal
 from app.main import app
-from app.registry_models import CourseRow, ResourceRow
+from app.registry_models import CourseRow, CredentialRow, ResourceRow
 
 RESOURCES = "/api/courses/ece1779/resources"
 
@@ -107,8 +108,71 @@ class DatabaseRoutesTests(TestCase):
         self.session.scalar.assert_awaited_once()
 
     def test_patch_rejects_null_url(self):
-        # The release time is the only editable field that can be cleared.
+        # A registered resource must always have a URL.
         self.assertEqual(self.client.patch(f"{RESOURCES}/{uuid4()}", json={"url": None}).status_code, 422)
+
+    def test_register_stores_only_encrypted_token(self):
+        # Store ciphertext scoped to the resource and keep the token out of responses.
+        cipher = Fernet(Fernet.generate_key())
+        app.state.registry.cipher = cipher
+        self.session.get.return_value = CourseRow(id="ece1779", name="Test Course")
+        self.session.execute.return_value = MagicMock(scalar_one=lambda: datetime.now(UTC))
+        self.session.flush.side_effect = lambda: setattr(self.session.add.call_args.args[0], "id", uuid4())
+        token = "example-resource-token"
+        response = self.client.post(RESOURCES, json={
+            "name": "Lecture", "url": "https://site.example.com/lecture", "api_token": token,
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertNotIn("api_token", response.json())
+        self.assertNotIn(token, response.text)
+        resource, credential = [call.args[0] for call in self.session.add.call_args_list]
+        self.assertIsInstance(credential, CredentialRow)
+        self.assertEqual(credential.resource_id, resource.id)
+        self.assertNotIn(token.encode(), credential.token_ciphertext)
+        self.assertEqual(cipher.decrypt(credential.token_ciphertext),
+                         resource.id.bytes + resource.url.encode() + b"\x00" + token.encode())
+
+    def test_resource_validation_does_not_echo_submitted_token(self):
+        # Redact bad input both inside and outside the token field.
+        token = "sensitive value"
+        for payload in ({"api_token": token}, {"api_token": {"value": token}}):
+            response = self.client.post(RESOURCES, json=payload)
+            self.assertEqual(response.status_code, 422)
+            self.assertNotIn(token, response.text)
+            self.assertTrue(all("input" not in issue for issue in response.json()["detail"]))
+
+    def test_token_write_requires_https_and_key(self):
+        # Refuse to persist credentials for HTTP targets or without encryption configured.
+        self.session.get.return_value = CourseRow(id="ece1779", name="Test Course")
+        self.session.execute.return_value = MagicMock(scalar_one=lambda: datetime.now(UTC))
+        for scheme, status in (("http", 422), ("https", 503)):
+            response = self.client.post(RESOURCES, json={
+                "name": "Lecture", "url": f"{scheme}://site.example.com/lecture", "api_token": "demo",
+            })
+            self.assertEqual(response.status_code, status, response.text)
+
+    def test_patch_replaces_and_clears_token(self):
+        # Rotate a saved credential, fence the old check, then clear the credential.
+        cipher = Fernet(Fernet.generate_key())
+        app.state.registry.cipher = cipher
+        now = datetime.now(UTC)
+        resource = ResourceRow(
+            id=uuid4(), course_id="ece1779", name="Lecture", url="https://site.example.com/lecture",
+            check_interval_seconds=60, next_check_at=now, state="AUTH_REQUIRED", lease_token=uuid4(),
+        )
+        credential = CredentialRow(resource_id=resource.id, token_ciphertext=b"old")
+        self.session.scalar.side_effect = [resource, now, resource, now]
+        self.session.get.return_value = credential
+        path = f"{RESOURCES}/{resource.id}"
+        response = self.client.patch(path, json={"api_token": "replacement"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("api_token", response.json())
+        self.assertTrue(cipher.decrypt(credential.token_ciphertext).endswith(b"\x00replacement"))
+        self.assertIsNone(resource.lease_token)
+        self.assertIsNone(resource.state)
+        response = self.client.patch(path, json={"url": "https://other.example.com/lecture"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.session.delete.assert_awaited_once_with(credential)
 
     def test_staff_cannot_grant_admin(self):
         # Course staff cannot grant global roles.

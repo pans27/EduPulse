@@ -2,22 +2,26 @@
 
 from uuid import UUID
 
+from cryptography.fernet import Fernet
 from fastapi import HTTPException
+from pydantic import SecretStr
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
-from .registry_models import CourseRow, ResourceRow, StudentReportRow
+from .registry_models import CourseRow, CredentialRow, ResourceRow, StudentReportRow
+from .resource_credentials import accepts_token
 
 
 class PostgresRegistry:
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], notify_channel: str | None
+        self, sessions: async_sessionmaker[AsyncSession], notify_channel: str | None, cipher: Fernet | None = None
     ) -> None:
         # Keep the session factory and notification channel.
         self.sessions = sessions
         self.notify_channel = notify_channel
+        self.cipher = cipher
 
     async def list_courses(self) -> list[Course]:
         # Read the provisioned course catalog.
@@ -78,6 +82,9 @@ class PostgresRegistry:
             )
             session.add(resource)
             await self._flush_resource(session)
+            if resource_input.api_token is not None:
+                ciphertext = self._encrypt_token(resource.id, resource.url, resource_input.api_token)
+                session.add(CredentialRow(resource_id=resource.id, token_ciphertext=ciphertext))
             await self._notify(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
 
@@ -91,26 +98,48 @@ class PostgresRegistry:
             )
             if resource is None:
                 raise HTTPException(404, "Resource not found")
-            fields = resource_input.model_dump(exclude_unset=True)
+            fields = resource_input.model_dump(exclude_unset=True, exclude={"api_token"})
             if "url" in fields:
                 fields["url"] = str(resource_input.url)
             changes = {name: value for name, value in fields.items() if getattr(resource, name) != value}
-            if changes:
-                monitoring_changed = bool(changes.keys() - {"name"})
+            credential_changed = False
+            if "api_token" in resource_input.model_fields_set or "url" in changes:
+                credential = await session.get(CredentialRow, resource_id)
+                if resource_input.api_token is not None:
+                    url = changes.get("url", resource.url)
+                    ciphertext = self._encrypt_token(resource_id, url, resource_input.api_token)
+                    if credential is None:
+                        session.add(CredentialRow(resource_id=resource_id, token_ciphertext=ciphertext))
+                    else:
+                        credential.token_ciphertext = ciphertext
+                    credential_changed = True
+                elif credential is not None:
+                    await session.delete(credential)
+                    credential_changed = True
+            if changes or credential_changed:
+                monitoring_changed = credential_changed or bool(changes.keys() - {"name"})
                 now = await session.scalar(select(func.now())) if monitoring_changed else None
                 for name, value in changes.items():
                     setattr(resource, name, value)
-                if "url" in changes:
+                if "url" in changes or credential_changed:
                     resource.state = None
                     resource.consecutive_failures = 0
                 if now is not None:
                     resource.next_check_at = now if resource.recheck_requested else max(now, resource.release_at or now)
-                if changes.keys() & {"url", "release_at"}:
+                if credential_changed or changes.keys() & {"url", "release_at"}:
                     # Fence stale results while keeping the lease deadline to prevent overlapping checks.
                     resource.lease_token = None
                 await self._flush_resource(session)
                 await self._notify(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
+
+    def _encrypt_token(self, resource_id: UUID, url: str, token: SecretStr) -> bytes:
+        # Bind the token to the resource and exact URL before storing ciphertext.
+        if not accepts_token(url):
+            raise HTTPException(422, "Resources with an API token require HTTPS")
+        if self.cipher is None:
+            raise HTTPException(503, "Resource token encryption is unavailable")
+        return self.cipher.encrypt(resource_id.bytes + url.encode() + b"\x00" + token.get_secret_value().encode("ascii"))
 
     async def delete(self, course_id: str, resource_id: UUID) -> None:
         # Delete the course resource and refresh its course after the cascade commits.

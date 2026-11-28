@@ -20,7 +20,7 @@ class DatabaseAuthTests(TestCase):
         self.enterContext(patch.dict(os.environ, {
             "DATABASE_URL": "postgresql://unused",
             "EDUPULSE_RESOURCE_NOTIFY_CHANNEL": "",
-            "EDUPULSE_AUTH_INSECURE_COOKIE": "0",
+            "EDUPULSE_LOCAL_TESTING": "0",
         }))
         session = MagicMock(spec=AsyncSession)
         sessions = MagicMock()

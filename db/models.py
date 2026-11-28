@@ -36,6 +36,13 @@ class Course(Base):
 
 
 # 2. Resources
+class Credential(Base):
+    __tablename__ = "credentials"
+
+    resource_id: Mapped[UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), primary_key=True)
+    token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class Resource(Base):
     __tablename__ = "resources"
 

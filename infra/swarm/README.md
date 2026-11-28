@@ -136,7 +136,10 @@ On the manager, once:
 ```bash
 openssl rand -hex 24 | tr -d '\n' | docker secret create pg_password -
 openssl rand -hex 24 | tr -d '\n' | docker secret create fake_admin_token -
+openssl rand -base64 32 | tr '+/' '-_' | docker secret create resource_token_key -
 ```
+
+The API and worker share `resource_token_key` to encrypt and decrypt resource tokens. Keep a secure backup of this key for database restores.
 
 Build and push the images from a laptop. The Droplets are amd64, so on an Apple Silicon Mac the platform flag is required. The registry is `registry.digitalocean.com/edupulse` (Basic plan, nyc3; DigitalOcean has no registry region in Toronto).
 

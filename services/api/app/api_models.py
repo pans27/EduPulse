@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
-    AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, field_validator,
+    AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, SecretStr, StringConstraints, field_validator,
 )
 
 
@@ -25,18 +25,33 @@ ResourceURL = Annotated[HttpUrl, AfterValidator(url_without_credentials)]
 CheckInterval = Annotated[int, Field(ge=1, le=2_147_483_647)]
 
 
+def validate_token(token: SecretStr) -> SecretStr:
+    # Accept only visible ASCII characters that are safe to send in a header.
+    value = token.get_secret_value()
+    if not 1 <= len(value) <= 4096 or any(not "!" <= char <= "~" for char in value):
+        raise ValueError("Enter a token of 1 to 4096 visible ASCII characters")
+    return token
+
+
+ApiToken = Annotated[SecretStr, AfterValidator(validate_token)]
+
+
 class Course(BaseModel):
     id: str
     name: str
 
 
-class ResourceCreate(BaseModel):
+class ResourceFields(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Name
     url: ResourceURL
     check_interval_seconds: CheckInterval = 60
     release_at: AwareDatetime | None = None
+
+
+class ResourceCreate(ResourceFields):
+    api_token: ApiToken | None = None
 
 
 class ResourcePatch(BaseModel):
@@ -46,17 +61,18 @@ class ResourcePatch(BaseModel):
     url: ResourceURL | None = None
     check_interval_seconds: CheckInterval | None = None
     release_at: AwareDatetime | None = None
+    api_token: ApiToken | None = None
 
     @field_validator("name", "url", "check_interval_seconds")
     @classmethod
     def reject_null(cls, value: str | HttpUrl | int | None) -> str | HttpUrl | int:
-        # Allow fields to be omitted, but only the release time can be cleared.
+        # These fields can be omitted from a patch but cannot be cleared.
         if value is None:
             raise ValueError("Field cannot be null")
         return value
 
 
-class Resource(ResourceCreate):
+class Resource(ResourceFields):
     id: UUID
     course_id: str
     state: HealthState | None = None

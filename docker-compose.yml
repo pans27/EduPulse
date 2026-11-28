@@ -23,7 +23,7 @@ services:
       dockerfile: db/Dockerfile
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      EDUPULSE_SEED_DEMO_ADMIN: "1"
+      EDUPULSE_LOCAL_TESTING: &local-testing "1"
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,8 +32,10 @@ services:
     build: ./services/api
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      EDUPULSE_AUTH_INSECURE_COOKIE: "1"
+      EDUPULSE_LOCAL_TESTING: *local-testing
       EDUPULSE_RESOURCE_NOTIFY_CHANNEL: resource_updates
+    secrets:
+      - resource_token_key
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -45,6 +47,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       FAKE_SITE_URL: http://fake-site:8000
+      EDUPULSE_LOCAL_TESTING: *local-testing
+    secrets:
+      - resource_token_key
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,8 +91,13 @@ services:
     build: ./services/fake-site
     environment:
       FAKE_ADMIN_TOKEN: ${FAKE_ADMIN_TOKEN}
+      FAKE_RESOURCE_TOKEN: demo-resource-token
     ports:
       - "127.0.0.1:8001:8000"
 
 volumes:
   pgdata:
+
+secrets:
+  resource_token_key:
+    file: ./secrets/resource_token_key

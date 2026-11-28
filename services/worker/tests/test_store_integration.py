@@ -66,6 +66,14 @@ class StoreTests(IsolatedAsyncioTestCase):
     async def due_in(self, resource_id):
         return await self.pool.fetchval("SELECT next_check_at - now() FROM resources WHERE id = $1", resource_id)
 
+    async def test_claim_loads_ciphertext_and_resource_deletion_cascades(self):
+        # Return ciphertext with the resource lease and remove it on resource deletion.
+        rid = await self.add_resource("protected")
+        await self.pool.execute("INSERT INTO credentials VALUES ($1, $2)", rid, b"encrypted")
+        self.assertEqual((await self.claim_only(rid)).token_ciphertext, b"encrypted")
+        await self.pool.execute("DELETE FROM resources WHERE id = $1", rid)
+        self.assertIsNone(await self.pool.fetchval("SELECT 1 FROM credentials WHERE resource_id = $1", rid))
+
     async def report(self, resource_id):
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute(REPORT_UPDATE, resource_id)
