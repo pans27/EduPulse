@@ -115,15 +115,8 @@ services:
     environment:
       POSTGRES_DB: edupulse
       POSTGRES_USER: edupulse
-      # The DigitalOcean Function (functions/) that sends through SendGrid. The URL is not a
-      # secret: the Function rejects any request without the mail_token bearer token.
-      # Local Compose and the evaluation scripts keep using the mock mail-sink.
-      MAIL_ENDPOINT: https://faas-tor1-70ca848e.doserverless.co/api/v1/web/fn-0cbaffe5-6099-48ba-95a6-8a7644fcecb2/edupulse/send
-      MAIL_TOKEN_FILE: /run/secrets/mail_token
-    # Listing secrets here replaces the anchor's list (YAML merge is shallow), so repeat pg_password.
-    secrets:
-      - pg_password
-      - mail_token
+      # The mock sink until the DigitalOcean Function exists; then its URL and a token secret.
+      MAIL_ENDPOINT: http://mail-sink:8000/send
     deploy:
       # One is enough for the load; leases make a second replica safe if it is ever added.
       replicas: 1
@@ -199,8 +192,6 @@ secrets:
   pg_password:
     external: true
   fake_admin_token:
-    external: true
-  mail_token:
     external: true
 
 configs:
