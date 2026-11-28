@@ -16,13 +16,15 @@ Request: `POST`, JSON `{message_id, to, subject, text}`, header `Authorization: 
 | Function replies | When | Dispatcher (`worker/message.py` `is_permanent`) |
 |---|---|---|
 | 202 | SendGrid accepted the email | marks the row sent |
-| 401 | missing or wrong bearer token | permanent: marks the row failed |
-| 422 | a field missing, a bad `message_id` or subject, or SendGrid answered 400/413 | permanent |
+| 401 | missing or wrong bearer token | retries with backoff (a token mismatch is our configuration) |
+| 422 | a field missing, a bad `message_id` or subject, or SendGrid answered 400 about the message, or 413 | permanent |
 | 429 | SendGrid rate limit | retries with backoff |
-| 502 | SendGrid unreachable, wrong key (401), unverified sender (403), 5xx | retries with backoff |
+| 502 | SendGrid unreachable, wrong key (401), unverified sender (403), 400 naming a `from` field (malformed `MAIL_FROM`), 5xx | retries with backoff |
 
 Only a problem with the message itself is permanent. A configuration or provider problem is
-retried (10 s doubling to 15 min, 8 attempts), so fixing the key in time loses no alert.
+retried (10 s doubling to 15 min, 8 attempts, about 20 minutes in all), so fixing the key, the
+sender or the token in time loses no alert. A SendGrid 400 is told apart by its `errors[].field`:
+`from.email` is our sender setting, `personalizations.0.to.0.email` is this alert's recipient.
 
 Delivery is at least once: if the dispatcher dies after a 202 but before it marks the row sent, the
 alert is sent again with the same `Message-ID`. The Function keeps no state, so it does not drop
@@ -46,7 +48,7 @@ emails. Exactly-once would need the Function to remember sent ids (e.g. in objec
 4. Give the cluster the same token, as a Docker secret (it never passes through the shell history):
 
    ```bash
-   grep '^MAIL_TOKEN=' functions/.env | cut -d= -f2- | tr -d '\n' | ssh root@138.197.173.188 'docker secret create mail_token -'
+   grep '^MAIL_TOKEN=' functions/.env | cut -d= -f2- | cut -d, -f1 | tr -d '\n' | ssh root@138.197.173.188 'docker secret create mail_token -'
    ```
 
 ## Deploy
@@ -59,9 +61,22 @@ doctl sls fn get edupulse/send --url
 If the URL changed (a new namespace), put it in `MAIL_ENDPOINT` of the dispatcher in [`infra/swarm/stack.yml`](../infra/swarm/stack.yml),
 commit, and run `scripts/deploy.sh`.
 
-Redeploy the Function after changing `.env` or the code. To rotate `MAIL_TOKEN`, change `.env`,
-redeploy the Function, then replace the secret: `docker secret` values are immutable, so create
-`mail_token_v2`, point the stack at it, and deploy.
+Redeploy the Function after changing `.env` or the code.
+
+### Rotate `MAIL_TOKEN`
+
+`MAIL_TOKEN` may hold two tokens, `new,old`; the Function accepts either. Rotate in three steps so
+no dispatcher is ever rejected:
+
+1. Generate a new token, set `MAIL_TOKEN=<new>,<old>` in `.env`, and redeploy the Function.
+2. Give the cluster the new token. `docker secret` values are immutable, so create a new secret
+   with the command in setup step 4 (it takes the first token), named `mail_token_v2`; then in
+   [`infra/swarm/stack.yml`](../infra/swarm/stack.yml) add `name: mail_token_v2` under the
+   top-level `mail_token:` (the dispatcher still reads `/run/secrets/mail_token`) and run
+   `scripts/deploy.sh`. Wait until `docker service ps edupulse_dispatcher` shows only new tasks.
+3. Set `MAIL_TOKEN=<new>` and redeploy the Function.
+
+If the steps happen out of order, the dispatcher gets 401 and retries; it does not drop the alert.
 
 ## Test
 
@@ -75,7 +90,7 @@ Against the deployed Function (sends one real email to `$TO`):
 
 ```bash
 URL=$(doctl sls fn get edupulse/send --url)
-TOKEN=$(grep '^MAIL_TOKEN=' functions/.env | cut -d= -f2-)
+TOKEN=$(grep '^MAIL_TOKEN=' functions/.env | cut -d= -f2- | cut -d, -f1)
 curl -sS -X POST "$URL" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"message_id\":\"<test-$(date +%s)@edupulse>\",\"to\":\"$TO\",\"subject\":\"[EduPulse] test\",\"text\":\"Function test\"}"
 ```

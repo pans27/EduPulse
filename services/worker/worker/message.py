@@ -40,5 +40,6 @@ def retry_delay(attempts: int) -> timedelta:
 
 def is_permanent(status: int) -> bool:
     # A 4xx means the request itself is wrong (bad address, rejected payload): retrying will not
-    # help. 429 and 5xx are the provider's problem and are retried.
-    return 400 <= status < 500 and status != 429
+    # help. 429 and 5xx are the provider's problem and are retried. 401 and 403 are retried too:
+    # they mean our configuration is wrong (e.g. mid MAIL_TOKEN rotation), not this alert.
+    return 400 <= status < 500 and status not in (401, 403, 429)
