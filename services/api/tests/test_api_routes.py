@@ -12,9 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import Principal
 from app.main import app
-from app.registry_models import CourseRow, CredentialRow, ResourceRow
+from app.registry_models import CourseMemberRow, CourseRow, CredentialRow, ResourceRow
 
 RESOURCES = "/api/courses/ece1779/resources"
+EMAIL_PREFERENCE = "/api/courses/ece1779/email-preference"
 
 
 class DatabaseRoutesTests(TestCase):
@@ -33,8 +34,32 @@ class DatabaseRoutesTests(TestCase):
         self.enterContext(patch("app.main.create_async_engine", return_value=self.engine))
         self.enterContext(patch("app.main.async_sessionmaker", return_value=sessions))
         self.client = self.enterContext(TestClient(app))
-        account = Principal(courses={"ece1779": "staff"})
+        account = Principal(user_id=uuid4(), courses={"ece1779": "staff"})
         self.account = self.enterContext(patch.object(app.state.auth, "account", return_value=account))
+
+    def test_student_can_read_and_change_own_email_preference(self):
+        user_id = uuid4()
+        self.account.return_value = Principal(user_id=user_id, courses={"ece1779": "student"})
+        self.session.get.return_value = CourseMemberRow(role="student", email_opt_in=False)
+        self.assertEqual(self.client.get(EMAIL_PREFERENCE).json(), {"email_opt_in": False})
+        self.session.get.assert_awaited_once_with(CourseMemberRow, (user_id, "ece1779"))
+        self.session.scalar.return_value = user_id
+        for enabled in (True, False):
+            response = self.client.put(EMAIL_PREFERENCE, json={"email_opt_in": enabled})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), {"email_opt_in": enabled})
+            params = self.session.scalar.await_args.args[0].compile().params.values()
+            for expected in (user_id, "ece1779", "student", enabled):
+                self.assertIn(expected, params)
+
+    def test_staff_receive_email_and_cannot_opt_out(self):
+        self.session.get.return_value = CourseMemberRow(role="staff", email_opt_in=False)
+        self.assertEqual(self.client.get(EMAIL_PREFERENCE).json(), {"email_opt_in": True})
+        self.assertEqual(self.client.put(EMAIL_PREFERENCE, json={"email_opt_in": False}).status_code, 403)
+        self.account.return_value = Principal(user_id=uuid4(), courses={})
+        self.assertEqual(self.client.get(EMAIL_PREFERENCE).status_code, 403)
+        self.assertEqual(self.client.put(EMAIL_PREFERENCE, json={"email_opt_in": True}).status_code, 403)
+        self.session.scalar.assert_not_called()
 
     def test_course_routes_filter_to_memberships(self):
         # Return only courses assigned to the signed-in user.
@@ -77,7 +102,7 @@ class DatabaseRoutesTests(TestCase):
 
     def test_student_cannot_register_resources(self):
         # Restrict course registration to staff even with a valid student session.
-        self.account.return_value = Principal(courses={"ece1779": "student"})
+        self.account.return_value = Principal(user_id=uuid4(), courses={"ece1779": "student"})
         self.assertEqual(self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"}).status_code, 403)
         self.session.add.assert_not_called()
 
@@ -86,7 +111,7 @@ class DatabaseRoutesTests(TestCase):
         url = f"{RESOURCES}/{uuid4()}"
         for memberships in ({"ece1779": "student"}, {"another-course": "staff"}):
             with self.subTest(memberships=memberships):
-                self.account.return_value = Principal(courses=memberships)
+                self.account.return_value = Principal(user_id=uuid4(), courses=memberships)
                 self.assertEqual(self.client.patch(url, json={"name": "Updated"}).status_code, 403)
                 self.assertEqual(self.client.delete(url).status_code, 403)
         self.session.scalar.assert_not_called()
@@ -186,7 +211,7 @@ class DatabaseRoutesTests(TestCase):
         # Restrict Administration to admins and list courses outside their memberships.
         self.assertEqual(self.client.get("/dashboard/admin/").status_code, 403)
         self.assertEqual(self.client.get("/api/admin/courses").status_code, 403)
-        self.account.return_value = Principal(courses={}, is_admin=True)
+        self.account.return_value = Principal(user_id=uuid4(), courses={}, is_admin=True)
         self.session.scalars.return_value = [CourseRow(id="unassigned", name="Unassigned Course")]
         self.assertIn("Assign user to a course", self.client.get("/dashboard/admin/").text)
         self.assertEqual(self.client.get("/api/admin/courses").json(), [

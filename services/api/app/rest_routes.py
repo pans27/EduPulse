@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .api_models import Course, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
+from .api_models import Course, EmailPreference, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
 from .auth import require_access
 from .postgres_registry import PostgresRegistry
 
@@ -32,6 +32,24 @@ async def list_resources(course_id: str, registry: Registry, request: Request) -
     # List the resources registered for a course.
     await require_access(request, course_id)
     return (await registry.get_snapshot(course_id)).resources
+
+
+@router.get("/courses/{course_id}/email-preference")
+async def get_email_preference(course_id: str, registry: Registry, request: Request) -> EmailPreference:
+    # Read the signed-in member's effective course email preference.
+    account = await require_access(request, course_id)
+    return await registry.get_email_preference(course_id, account.user_id)
+
+
+@router.put("/courses/{course_id}/email-preference")
+async def set_email_preference(
+    course_id: str, preference: EmailPreference, registry: Registry, request: Request,
+) -> EmailPreference:
+    # Let a student change only their own membership preference.
+    account = await require_access(request, course_id)
+    if account.courses[course_id] != "student":
+        raise HTTPException(403, "Course staff always receive incident email")
+    return await registry.set_email_preference(course_id, account.user_id, preference)
 
 
 @router.post("/courses/{course_id}/resources", status_code=201)

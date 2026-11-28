@@ -66,6 +66,7 @@ class CourseMemberRow(RegistryBase):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), primary_key=True)
     role: Mapped[str] = mapped_column(String(7))
+    email_opt_in: Mapped[bool] = mapped_column(server_default=false())
 
 
 class SessionRow(RegistryBase):

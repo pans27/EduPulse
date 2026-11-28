@@ -4,7 +4,8 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
-    AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, SecretStr, StringConstraints, field_validator,
+    AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, SecretStr, StrictBool,
+    StringConstraints, field_validator,
 )
 
 
@@ -39,6 +40,12 @@ ApiToken = Annotated[SecretStr, AfterValidator(validate_token)]
 class Course(BaseModel):
     id: str
     name: str
+
+
+class EmailPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email_opt_in: StrictBool
 
 
 class ResourceFields(BaseModel):

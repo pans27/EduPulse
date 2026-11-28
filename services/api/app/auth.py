@@ -5,6 +5,7 @@ from datetime import timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
 from typing import Annotated, Literal
+from uuid import UUID
 
 from anyio import CapacityLimiter, to_thread
 from argon2 import PasswordHasher
@@ -40,6 +41,7 @@ class Registration(Login):
 
 
 class Principal(BaseModel):
+    user_id: UUID
     courses: dict[str, Literal["staff", "student"]]
     is_admin: bool = False
 
@@ -109,7 +111,7 @@ class Auth:
             return None
         async with self.sessions() as session:
             rows = (await session.execute(
-                select(UserRow.is_admin, CourseMemberRow.course_id, CourseMemberRow.role)
+                select(UserRow.id, UserRow.is_admin, CourseMemberRow.course_id, CourseMemberRow.role)
                 .select_from(SessionRow)
                 .join(UserRow, UserRow.id == SessionRow.user_id)
                 .outerjoin(CourseMemberRow, CourseMemberRow.user_id == UserRow.id)
@@ -118,6 +120,7 @@ class Auth:
         if not rows:
             return None
         return Principal(
+            user_id=rows[0].id,
             is_admin=rows[0].is_admin,
             courses={row.course_id: row.role for row in rows if row.course_id is not None},
         )

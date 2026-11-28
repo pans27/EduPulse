@@ -1,6 +1,6 @@
 """What goes into a notification_outbox row. Pure, so the message content is unit-tested.
 
-The worker inserts one row per course member in the same transaction as the state change; the
+The worker inserts one row per eligible recipient in the same transaction as the state change; the
 dispatcher only formats and sends what is stored here, so an email always describes the state
 that actually committed.
 """
@@ -18,12 +18,13 @@ KINDS: dict[str, str] = {
     "resolve": "incident_resolved",
 }
 
-# Recipients: every active member (staff and students) of the resource's course.
+# Recipients: active course staff and active students who opted in.
 INSERT_SQL = """
 INSERT INTO notification_outbox (resource_id, incident_id, recipient_email, kind, payload)
 SELECT $1, $2, u.email, $3, $4::jsonb
 FROM course_members m JOIN users u ON u.id = m.user_id
 WHERE m.course_id = $5 AND u.is_active
+  AND (m.role = 'staff' OR (m.role = 'student' AND m.email_opt_in))
 """
 
 

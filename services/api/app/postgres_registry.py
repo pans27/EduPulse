@@ -9,8 +9,10 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
-from .registry_models import CourseRow, CredentialRow, ResourceRow, StudentReportRow
+from .api_models import (
+    Course, CourseSnapshot, EmailPreference, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport,
+)
+from .registry_models import CourseMemberRow, CourseRow, CredentialRow, ResourceRow, StudentReportRow
 from .resource_credentials import accepts_token
 
 
@@ -49,6 +51,30 @@ class PostgresRegistry:
                     if resource is not None
                 ],
             )
+
+    async def get_email_preference(self, course_id: str, user_id: UUID) -> EmailPreference:
+        # Staff receive course email regardless of their saved student preference.
+        async with self.sessions() as session:
+            member = await session.get(CourseMemberRow, (user_id, course_id))
+            if member is None:
+                raise HTTPException(403, "Course membership required")
+            return EmailPreference(email_opt_in=member.role == "staff" or member.email_opt_in)
+
+    async def set_email_preference(
+        self, course_id: str, user_id: UUID, preference: EmailPreference,
+    ) -> EmailPreference:
+        # Restrict the write to memberships that still have the student role.
+        async with self.sessions.begin() as session:
+            updated = await session.scalar(
+                update(CourseMemberRow)
+                .where(CourseMemberRow.user_id == user_id, CourseMemberRow.course_id == course_id,
+                       CourseMemberRow.role == "student")
+                .values(email_opt_in=preference.email_opt_in)
+                .returning(CourseMemberRow.user_id)
+            )
+            if updated is None:
+                raise HTTPException(403, "Student membership required")
+            return preference
 
     async def get_resource(self, course_id: str, resource_id: UUID) -> Resource:
         # Look up a resource within the requested course.

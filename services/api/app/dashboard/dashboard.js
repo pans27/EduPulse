@@ -1,5 +1,6 @@
 const byId = (id) => document.getElementById(id);
 const course = byId("course");
+const emailOptIn = byId("email-opt-in");
 const register = byId("register");
 const report = byId("report");
 const dialog = byId("report-dialog");
@@ -58,8 +59,7 @@ function renderResources(resources) {
 
     const details = document.createElement("p");
     details.className = "resource-details muted";
-    const nextCheck = dateFormat.format(new Date(resource.next_check_at));
-    details.textContent = `Next check ${nextCheck} · Every ${resource.check_interval_seconds}s`;
+    details.textContent = `Every ${resource.check_interval_seconds}s`;
     if (resource.release_at) {
       details.textContent += ` · Release ${dateFormat.format(new Date(resource.release_at))}`;
     }
@@ -126,8 +126,50 @@ function selectCourse() {
   byId("empty").hidden = false;
   byId("empty").textContent = "Loading resources…";
   byId("connection").textContent = "Connecting…";
+  void loadEmailPreference(course.value, currentSelection);
   void refreshResources();
   connect(course.value, currentSelection);
+}
+
+// Show the selected course's saved preference for students.
+async function loadEmailPreference(id, currentSelection) {
+  const isStudent = accountSession.courses[id] === "student";
+  byId("course-email").hidden = !isStudent;
+  emailOptIn.disabled = true;
+  emailOptIn.checked = false;
+  const status = byId("email-status");
+  status.textContent = "";
+  if (!isStudent) return;
+  try {
+    const preference = await api(`/api/courses/${encodeURIComponent(id)}/email-preference`);
+    if (selection !== currentSelection) return;
+    emailOptIn.checked = preference.email_opt_in;
+    emailOptIn.disabled = false;
+  } catch (error) {
+    if (selection === currentSelection) status.textContent = error.message;
+  }
+}
+
+// Save the preference for the course selected when the checkbox changed.
+async function saveEmailPreference() {
+  const currentSelection = selection;
+  const status = byId("email-status");
+  const optedIn = emailOptIn.checked;
+  emailOptIn.disabled = true;
+  status.textContent = "Saving…";
+  try {
+    await api(`/api/courses/${encodeURIComponent(course.value)}/email-preference`, {
+      email_opt_in: optedIn,
+    }, "PUT");
+    if (selection === currentSelection) status.textContent = "Email preference saved.";
+  } catch (error) {
+    if (selection === currentSelection) {
+      emailOptIn.checked = !optedIn;
+      status.textContent = error.message;
+    }
+  } finally {
+    if (selection === currentSelection) emailOptIn.disabled = false;
+  }
 }
 
 // Open the report form for the resource selected in the list.
@@ -326,6 +368,7 @@ byId("sign-out").addEventListener("click", async () => {
   }
 });
 course.addEventListener("change", selectCourse);
+emailOptIn.addEventListener("change", saveEmailPreference);
 byId("refresh").addEventListener("click", () => {
   notice("");
   void refreshResources();

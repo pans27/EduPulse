@@ -29,6 +29,8 @@ Compose binds published ports to loopback. The ignored `docker-compose.local.yml
 | `POST /api/courses/{course_id}/resources` | Registers an HTTP(S) resource with a name, check interval in seconds, optional timezone-aware release time, and optional bearer token. |
 | `GET /api/courses/{course_id}/resources` | Lists resources and their current state. A new resource has a null state pending its first result. |
 | `GET /api/courses/{course_id}/resources/{resource_id}` | Reads a single resource within its course. |
+| `GET /api/courses/{course_id}/email-preference` | Reads the signed-in member's incident email preference for the course. |
+| `PUT /api/courses/{course_id}/email-preference` | Lets students set their own preference with `{"email_opt_in": true}` or `false`. |
 | `PATCH /api/courses/{course_id}/resources/{resource_id}` | Lets course staff edit settings, replace a bearer token, or clear it with `"api_token": null`. |
 | `DELETE /api/courses/{course_id}/resources/{resource_id}` | Lets course staff permanently delete a resource and its checks, incidents, reports, and queued alerts. |
 | `POST /api/courses/{course_id}/resources/{resource_id}/reports` | Records a description and makes the resource immediately due. |
@@ -42,6 +44,8 @@ Local and deployed APIs require PostgreSQL-backed accounts. Login issues a rando
 Local Compose sets `EDUPULSE_LOCAL_TESTING=1` to enable demo admin seeding, session cookies over loopback HTTP, and HTTP bearer-token checks to the internal fake site. Swarm leaves this flag unset. On a fresh database, the auth migration seeds `admin@edupulse.example.com` with password `ece1779edupulse`. Users can register with an email address on the dashboard. Administrators can open the separate [Administration page](http://localhost/dashboard/admin/) to create courses and assign users by email. Select a course for staff or students. The administrator role applies across EduPulse.
 
 Use addresses such as `student@example.com` for test accounts. Email validation rejects special-use domains such as `.local` and `.test`.
+
+Students can opt in or out of incident emails from the dashboard for each course. They start opted out. Active staff always receive incident emails for their courses. Preference changes apply to newly queued alerts.
 
 ### Bootstrap the production administrator
 
