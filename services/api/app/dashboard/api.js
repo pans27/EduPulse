@@ -1,6 +1,6 @@
 // Send a same-origin API request and expose any validation message.
-async function api(path, data, method = "POST") {
-  const response = await fetch(path, data === undefined ? {} : {
+async function api(path, data, method = data === undefined ? "GET" : "POST") {
+  const response = await fetch(path, data === undefined ? { method } : {
     method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),

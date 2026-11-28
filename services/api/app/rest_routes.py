@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .api_models import Course, ReportCreate, Resource, ResourceCreate, StudentReport
+from .api_models import Course, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
 from .auth import require_access
 from .postgres_registry import PostgresRegistry
 
@@ -48,6 +48,22 @@ async def get_resource(course_id: str, resource_id: UUID, registry: Registry, re
     # Return a single resource within its course.
     await require_access(request, course_id)
     return await registry.get_resource(course_id, resource_id)
+
+
+@router.patch("/courses/{course_id}/resources/{resource_id}")
+async def edit_resource(
+    course_id: str, resource_id: UUID, resource_input: ResourcePatch, registry: Registry, request: Request
+) -> Resource:
+    # Let course staff update the selected resource.
+    await require_access(request, course_id, staff=True)
+    return await registry.edit(course_id, resource_id, resource_input)
+
+
+@router.delete("/courses/{course_id}/resources/{resource_id}", status_code=204)
+async def delete_resource(course_id: str, resource_id: UUID, registry: Registry, request: Request) -> None:
+    # Let course staff permanently remove the selected resource.
+    await require_access(request, course_id, staff=True)
+    await registry.delete(course_id, resource_id)
 
 
 @router.post("/courses/{course_id}/resources/{resource_id}/reports", status_code=201)

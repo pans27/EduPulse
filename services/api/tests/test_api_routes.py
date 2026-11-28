@@ -2,6 +2,7 @@ import os
 from datetime import UTC, datetime
 from unittest import TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import asyncpg
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import Principal
 from app.main import app
-from app.registry_models import CourseRow
+from app.registry_models import CourseRow, ResourceRow
 
 RESOURCES = "/api/courses/ece1779/resources"
 
@@ -78,6 +79,36 @@ class DatabaseRoutesTests(TestCase):
         self.account.return_value = Principal(courses={"ece1779": "student"})
         self.assertEqual(self.client.post(RESOURCES, json={"name": "Lecture", "url": "https://example.com"}).status_code, 403)
         self.session.add.assert_not_called()
+
+    def test_only_course_staff_can_edit_and_delete(self):
+        # Reject students and staff from another course before issuing database writes.
+        url = f"{RESOURCES}/{uuid4()}"
+        for memberships in ({"ece1779": "student"}, {"another-course": "staff"}):
+            with self.subTest(memberships=memberships):
+                self.account.return_value = Principal(courses=memberships)
+                self.assertEqual(self.client.patch(url, json={"name": "Updated"}).status_code, 403)
+                self.assertEqual(self.client.delete(url).status_code, 403)
+        self.session.scalar.assert_not_called()
+
+    def test_patch_name_preserves_the_monitoring_schedule(self):
+        # Update only the supplied field and keep the URL, schedule and state.
+        now = datetime.now(UTC)
+        resource = ResourceRow(
+            id=uuid4(), course_id="ece1779", name="Lecture", url="https://example.com/lecture",
+            check_interval_seconds=60, next_check_at=now, state="HEALTHY",
+        )
+        self.session.scalar.return_value = resource
+        response = self.client.patch(f"{RESOURCES}/{resource.id}", json={"name": "New title"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["name"], "New title")
+        self.assertEqual(resource.next_check_at, now)
+        self.assertEqual(resource.state, "HEALTHY")
+        self.assertEqual(resource.url, "https://example.com/lecture")
+        self.session.scalar.assert_awaited_once()
+
+    def test_patch_rejects_null_url(self):
+        # The release time is the only editable field that can be cleared.
+        self.assertEqual(self.client.patch(f"{RESOURCES}/{uuid4()}", json={"url": None}).status_code, 422)
 
     def test_staff_cannot_grant_admin(self):
         # Course staff cannot grant global roles.

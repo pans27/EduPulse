@@ -3,11 +3,11 @@
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, StudentReport
+from .api_models import Course, CourseSnapshot, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
 from .registry_models import CourseRow, ResourceRow, StudentReportRow
 
 
@@ -77,16 +77,52 @@ class PostgresRegistry:
                 next_check_at=max(now, resource_input.release_at or now),
             )
             session.add(resource)
-            try:
-                await session.flush()
-            except IntegrityError as error:
-                # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
-                database_error = error.orig.__cause__
-                if getattr(database_error, "constraint_name", None) == "uq_resources_course_url":
-                    raise HTTPException(409, "This URL is already registered for this course") from error
-                raise
+            await self._flush_resource(session)
             await self._notify(session, resource.id)
             return Resource.model_validate(resource, from_attributes=True)
+
+    async def edit(self, course_id: str, resource_id: UUID, resource_input: ResourcePatch) -> Resource:
+        # Apply a partial update while fencing checks started with outdated settings.
+        async with self.sessions.begin() as session:
+            resource = await session.scalar(
+                select(ResourceRow)
+                .where(ResourceRow.course_id == course_id, ResourceRow.id == resource_id)
+                .with_for_update()
+            )
+            if resource is None:
+                raise HTTPException(404, "Resource not found")
+            fields = resource_input.model_dump(exclude_unset=True)
+            if "url" in fields:
+                fields["url"] = str(resource_input.url)
+            changes = {name: value for name, value in fields.items() if getattr(resource, name) != value}
+            if changes:
+                monitoring_changed = bool(changes.keys() - {"name"})
+                now = await session.scalar(select(func.now())) if monitoring_changed else None
+                for name, value in changes.items():
+                    setattr(resource, name, value)
+                if "url" in changes:
+                    resource.state = None
+                    resource.consecutive_failures = 0
+                if now is not None:
+                    resource.next_check_at = now if resource.recheck_requested else max(now, resource.release_at or now)
+                if changes.keys() & {"url", "release_at"}:
+                    # Fence stale results while keeping the lease deadline to prevent overlapping checks.
+                    resource.lease_token = None
+                await self._flush_resource(session)
+                await self._notify(session, resource.id)
+            return Resource.model_validate(resource, from_attributes=True)
+
+    async def delete(self, course_id: str, resource_id: UUID) -> None:
+        # Delete the course resource and refresh its course after the cascade commits.
+        async with self.sessions.begin() as session:
+            deleted = await session.scalar(
+                delete(ResourceRow)
+                .where(ResourceRow.course_id == course_id, ResourceRow.id == resource_id)
+                .returning(ResourceRow.id)
+            )
+            if deleted is None:
+                raise HTTPException(404, "Resource not found")
+            await self._notify(session, f"course:{course_id}")
 
     async def report(self, course_id: str, resource_id: UUID, report_input: ReportCreate) -> StudentReport:
         # Persist the report and make the resource due in the same transaction.
@@ -118,7 +154,17 @@ class PostgresRegistry:
             )
             return dict(counts.mappings().one())
 
-    async def _notify(self, session: AsyncSession, resource_id: UUID) -> None:
-        # Send the resource ID through PostgreSQL in the same transaction as the write.
+    async def _flush_resource(self, session: AsyncSession) -> None:
+        # Translate the course URL uniqueness constraint to a user-facing conflict.
+        try:
+            await session.flush()
+        except IntegrityError as error:
+            database_error = error.orig.__cause__
+            if getattr(database_error, "constraint_name", None) == "uq_resources_course_url":
+                raise HTTPException(409, "This URL is already registered for this course") from error
+            raise
+
+    async def _notify(self, session: AsyncSession, payload: UUID | str) -> None:
+        # Publish an invalidation in the same transaction as the write.
         if self.notify_channel:
-            await session.execute(select(func.pg_notify(self.notify_channel, str(resource_id))))
+            await session.execute(select(func.pg_notify(self.notify_channel, str(payload))))

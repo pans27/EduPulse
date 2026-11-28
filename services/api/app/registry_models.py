@@ -30,6 +30,8 @@ class ResourceRow(RegistryBase):
     next_check_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     state: Mapped[str | None] = mapped_column(String(20))
     recheck_requested: Mapped[bool] = mapped_column(server_default=false())
+    consecutive_failures: Mapped[int] = mapped_column(server_default="0")
+    lease_token: Mapped[UUID | None]
 
 
 class StudentReportRow(RegistryBase):

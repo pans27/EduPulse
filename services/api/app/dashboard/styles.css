@@ -51,6 +51,8 @@ fieldset label, dialog label { margin-bottom: .8rem; }
 .resource-state { background: #edf2f8; color: #2c435d; border-radius: 6px; padding: .12rem .4rem; font-size: .8rem; }
 .resource-details { margin-block: .35rem; }
 #resources button { font-size: .85rem; }
+.resource-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.resource-actions .danger { color: #9c2430; }
 dialog { width: min(420px, calc(100% - 2rem)); color: inherit; }
 dialog::backdrop { background: #17243566; }
 dialog textarea { resize: vertical; }

@@ -62,6 +62,22 @@
     </div>
     </div>
   </main>
+  <dialog id="edit-dialog" aria-labelledby="edit-title">
+    <form id="edit-resource">
+      <h2 id="edit-title">Edit resource</h2>
+      <fieldset id="edit-fields">
+        <label>Name<input name="name" required maxlength="120"></label>
+        <label>Resource URL<input name="url" type="url" required></label>
+        <label>Check interval in seconds<input name="interval" type="number" min="1" max="2147483647" required></label>
+        <label>Expected release (optional)<input name="release" type="datetime-local"></label>
+        <p id="edit-error" class="feedback" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" id="cancel-edit">Cancel</button>
+          <button type="submit" class="primary">Save changes</button>
+        </div>
+      </fieldset>
+    </form>
+  </dialog>
   <dialog id="report-dialog" aria-labelledby="report-title">
     <form id="report">
       <h2 id="report-title">Report an issue</h2>

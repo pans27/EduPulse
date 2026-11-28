@@ -28,6 +28,8 @@ Compose binds published ports to loopback. The ignored `docker-compose.local.yml
 | `POST /api/courses/{course_id}/resources` | Registers an HTTP(S) resource with a name, check interval in seconds, and optional timezone-aware release time. |
 | `GET /api/courses/{course_id}/resources` | Lists resources and their current state. A new resource has a null state pending its first result. |
 | `GET /api/courses/{course_id}/resources/{resource_id}` | Reads a single resource within its course. |
+| `PATCH /api/courses/{course_id}/resources/{resource_id}` | Lets course staff edit the name, URL, check interval, or release time. |
+| `DELETE /api/courses/{course_id}/resources/{resource_id}` | Lets course staff permanently delete a resource and its checks, incidents, reports, and queued alerts. |
 | `POST /api/courses/{course_id}/resources/{resource_id}/reports` | Records a description and makes the resource immediately due. |
 | `WS /api/courses/{course_id}/ws` | Sends a `course.snapshot` on connect and when a resource is registered or reported. Reconnecting reads the current snapshot. |
 | `GET /api/metrics` | Returns counts of registered resources and student reports in PostgreSQL. |
