@@ -37,7 +37,8 @@ class MessageTests(TestCase):
         self.assertLess(total, 3600)
 
     def test_permanent_vs_retryable(self):
-        for status in (400, 401, 403, 404, 422):
+        for status in (400, 404, 413, 422):
             self.assertTrue(is_permanent(status), status)
-        for status in (429, 500, 502, 503):
+        # 401/403: a configuration problem (token rotation, wrong key), fixed without a new alert.
+        for status in (401, 403, 429, 500, 502, 503):
             self.assertFalse(is_permanent(status), status)

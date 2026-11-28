@@ -15,7 +15,8 @@ SUBJECTS = {
 
 def message_id(outbox_id: str) -> str:
     # The outbox row id doubles as the email Message-ID. A resend after a crash carries the same
-    # id, so the receiving side can drop the duplicate (the mock sink does; Gmail does too).
+    # id, so the duplicate can be recognised. The mock sink drops it; Gmail does not (tested
+    # Nov 27 through the Function: both copies were shown).
     return f"<{outbox_id}@edupulse>"
 
 
@@ -39,5 +40,6 @@ def retry_delay(attempts: int) -> timedelta:
 
 def is_permanent(status: int) -> bool:
     # A 4xx means the request itself is wrong (bad address, rejected payload): retrying will not
-    # help. 429 and 5xx are the provider's problem and are retried.
-    return 400 <= status < 500 and status != 429
+    # help. 429 and 5xx are the provider's problem and are retried. 401 and 403 are retried too:
+    # they mean our configuration is wrong (e.g. mid MAIL_TOKEN rotation), not this alert.
+    return 400 <= status < 500 and status not in (401, 403, 429)

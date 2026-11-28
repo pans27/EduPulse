@@ -102,7 +102,7 @@ Expected: `docker node ls` shows 3 nodes `Ready`/`Active`; the three replicas la
 
 | Feature | How |
 |---|---|
-| Passwords stay out of the stack file | `pg_password` and `fake_admin_token` are Docker secrets, mounted at `/run/secrets/`. Postgres reads `POSTGRES_PASSWORD_FILE`; API and worker get `DATABASE_URL` from the [`db-env.sh`](db-env.sh) entrypoint shim |
+| Passwords stay out of the stack file | `pg_password`, `fake_admin_token` and `mail_token` are Docker secrets, mounted at `/run/secrets/`. Postgres reads `POSTGRES_PASSWORD_FILE`; API and worker get `DATABASE_URL` from the [`db-env.sh`](db-env.sh) entrypoint shim |
 | Persistent data | Postgres binds a directory on the DigitalOcean Volume (see below), pinned to the manager, with a 60 s stop grace period so it can shut down cleanly |
 | Placement | Postgres on `db=true`, fake site on `fakesite=true`, API and workers on `app=true`, Nginx on the manager |
 | Schema migrations | `migrate` is a `replicated-job`: it runs `alembic upgrade head` to completion on every `stack deploy` and retries (up to 10 times, 5 s apart) while Postgres is still starting. Swarm has no `depends_on`, so the API answers 503 until the tables exist. Re-running is a no-op at head |
@@ -137,6 +137,9 @@ On the manager, once:
 openssl rand -hex 24 | tr -d '\n' | docker secret create pg_password -
 openssl rand -hex 24 | tr -d '\n' | docker secret create fake_admin_token -
 ```
+
+The dispatcher's `mail_token` is the bearer token shared with the email Function; create it from
+`functions/.env` as described in [functions/README.md](../../functions/README.md#one-time-setup).
 
 Build and push the images from a laptop. The Droplets are amd64, so on an Apple Silicon Mac the platform flag is required. The registry is `registry.digitalocean.com/edupulse` (Basic plan, nyc3; DigitalOcean has no registry region in Toronto).
 
