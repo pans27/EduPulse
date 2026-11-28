@@ -21,6 +21,7 @@ from . import logs
 from .leases import work_deadline
 from .message import MAX_ATTEMPTS, is_permanent, render, retry_delay
 from .outbox import OUTBOX_CHANNEL
+from .startup import connect_retrying
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 MAIL_ENDPOINT = os.environ["MAIL_ENDPOINT"]  # mock sink now; the DigitalOcean Function later
@@ -101,9 +102,9 @@ class Dispatcher:
 
 
 async def run(stop: asyncio.Event) -> None:
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
+    pool = await connect_retrying(lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4), log)
     wake = asyncio.Event()
-    listener = await asyncpg.connect(DATABASE_URL)
+    listener = await connect_retrying(lambda: asyncpg.connect(DATABASE_URL), log)
     # NOTIFY outbox_new (sent by the worker after commit) wakes us at once; polling covers a
     # missed notification, e.g. while this connection was reconnecting.
     await listener.add_listener(OUTBOX_CHANNEL, lambda *_: wake.set())
