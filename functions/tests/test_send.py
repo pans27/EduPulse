@@ -32,17 +32,17 @@ def env(monkeypatch):
 
 
 class SendGrid:
-    """Stands in for urlopen: records each request and answers with `status`."""
+    """Stands in for urlopen: records each request and answers with `status` (and `body` on errors)."""
 
-    def __init__(self, status=202, error=None):
-        self.status, self.error, self.requests = status, error, []
+    def __init__(self, status=202, error=None, body=b"{}"):
+        self.status, self.error, self.body, self.requests = status, error, body, []
 
     def __call__(self, request, timeout):
         self.requests.append(request)
         if self.error:
             raise self.error
         if self.status >= 400:
-            raise urllib.error.HTTPError(request.full_url, self.status, "error", {}, io.BytesIO(b"{}"))
+            raise urllib.error.HTTPError(request.full_url, self.status, "error", {}, io.BytesIO(self.body))
         response = io.BytesIO(b"")
         response.status = self.status
         return response
@@ -87,6 +87,18 @@ def test_empty_configured_token_rejects_everything(monkeypatch):
     assert call(monkeypatch, SendGrid(), auth="Bearer ")["statusCode"] == 401
 
 
+@pytest.mark.parametrize("presented", ["new-token", "old-token"])
+def test_both_tokens_are_accepted_during_rotation(monkeypatch, presented):
+    monkeypatch.setenv("MAIL_TOKEN", "new-token,old-token")
+    assert call(monkeypatch, SendGrid(), auth=f"Bearer {presented}")["statusCode"] == 202
+
+
+@pytest.mark.parametrize("auth", ["Bearer ", "Bearer new-token,old-token", "Bearer other"])
+def test_rotation_list_accepts_nothing_else(monkeypatch, auth):
+    monkeypatch.setenv("MAIL_TOKEN", "new-token,old-token,")  # a trailing comma adds no empty token
+    assert call(monkeypatch, SendGrid(), auth=auth)["statusCode"] == 401
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -119,20 +131,45 @@ def test_sendgrid_errors_map_to_the_dispatcher_retry_rule(monkeypatch, sendgrid_
     assert call(monkeypatch, SendGrid(sendgrid_status))["statusCode"] == reply
 
 
+def sendgrid_errors(*fields):
+    return json.dumps({"errors": [{"field": field, "message": "invalid"} for field in fields]}).encode()
+
+
+@pytest.mark.parametrize("field", ["from.email", "from"])
+def test_malformed_sender_is_our_configuration_and_retried(monkeypatch, field):
+    # A typo in MAIL_FROM fails every alert with 400; it must not fail them permanently.
+    assert call(monkeypatch, SendGrid(400, body=sendgrid_errors(field)))["statusCode"] == 502
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        sendgrid_errors("personalizations.0.to.0.email"),  # this alert's recipient is invalid
+        sendgrid_errors(None),
+        b"not json",
+        b"[]",
+    ],
+)
+def test_other_400s_stay_permanent(monkeypatch, body):
+    assert call(monkeypatch, SendGrid(400, body=body))["statusCode"] == 422
+
+
 def test_unreachable_sendgrid_is_retried(monkeypatch):
     sendgrid = SendGrid(error=urllib.error.URLError("no route"))
     assert call(monkeypatch, sendgrid)["statusCode"] == 502
 
 
 def test_replies_agree_with_the_dispatcher(monkeypatch):
-    # The dispatcher treats any 4xx except 429 as permanent (worker/message.py is_permanent).
+    # The dispatcher treats any 4xx except 401, 403 and 429 as permanent (worker/message.py).
     def permanent(code):
-        return 400 <= code < 500 and code != 429
+        return 400 <= code < 500 and code not in (401, 403, 429)
 
     assert not permanent(send.outcome(None))
     assert not permanent(send.outcome(401))
     assert not permanent(send.outcome(503))
+    assert not permanent(send.outcome(400, ["from.email"]))
     assert permanent(send.outcome(400))
+    assert permanent(send.outcome(400, ["personalizations.0.to.0.email"]))
 
 
 def test_log_line_has_no_address_or_key(monkeypatch, capsys):
