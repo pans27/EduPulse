@@ -6,8 +6,7 @@ mark each row sent only if this dispatcher still holds its lease.
 
 Delivery is at-least-once. If the dispatcher dies after the mail endpoint accepted a message but
 before the row is marked sent, the lease expires and the row is sent again, with the same
-Message-ID (the outbox id), so the duplicate can be recognised. The mock sink drops it; a real
-mailbox such as Gmail shows both copies.
+Message-ID (the outbox id), so the receiving side can drop the duplicate.
 """
 import asyncio
 import json
@@ -22,7 +21,6 @@ from . import logs
 from .leases import work_deadline
 from .message import MAX_ATTEMPTS, is_permanent, render, retry_delay
 from .outbox import OUTBOX_CHANNEL
-from .startup import connect_retrying
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 MAIL_ENDPOINT = os.environ["MAIL_ENDPOINT"]  # mock sink now; the DigitalOcean Function later
@@ -103,9 +101,9 @@ class Dispatcher:
 
 
 async def run(stop: asyncio.Event) -> None:
-    pool = await connect_retrying(lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4), log)
+    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
     wake = asyncio.Event()
-    listener = await connect_retrying(lambda: asyncpg.connect(DATABASE_URL), log)
+    listener = await asyncpg.connect(DATABASE_URL)
     # NOTIFY outbox_new (sent by the worker after commit) wakes us at once; polling covers a
     # missed notification, e.g. while this connection was reconnecting.
     await listener.add_listener(OUTBOX_CHANNEL, lambda *_: wake.set())

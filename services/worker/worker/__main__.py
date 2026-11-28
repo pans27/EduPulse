@@ -16,7 +16,6 @@ from . import logs, store
 from .leases import work_deadline
 from .checker import check, new_client
 from .classify import classify
-from .startup import connect_retrying
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 NOTIFY_CHANNEL = os.environ.get("EDUPULSE_RESOURCE_NOTIFY_CHANNEL", "resource_updates") or None
@@ -50,7 +49,7 @@ async def check_one(pool: asyncpg.Pool, client, item: store.Claim) -> None:
 
 
 async def run(stop: asyncio.Event) -> None:
-    pool = await connect_retrying(lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=BATCH + 1), log)
+    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=BATCH + 1)
     log.info("started", extra={"fields": {"batch": BATCH, "lease_seconds": LEASE_SECONDS}})
     async with new_client() as client:
         try:
