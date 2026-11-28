@@ -32,14 +32,14 @@ interface and live output proves this is a running cluster, not a slide.
 |---|---|---|
 | Browser A | Staff dashboard, ECE1779 | 4, 5, 6 |
 | Browser B | Student dashboard, ECE1779 (different API replica: `demo.sh ws`) | 4 |
-| Browser tab | Inbox with the alert emails | 4 |
+| Browser tab | A course member's real inbox (the student's Gmail), old EduPulse emails deleted | 4 |
 | Browser tab | DigitalOcean console, Uptime and Alerts (signed in) | 7, optional |
 | Terminal, **shown** | `~/ECE1779/EduPulse`, font about **20 pt**, `clear` before each command | 5, 6, 7 |
 | Terminal, **not shown** | A second tab for `break` and `fix` | 3, 4 |
 
 - Load the shown terminal's history beforehand (run each once), so on stage it's **↑ and Enter**, no typing.
 - Don't reload a dashboard during `restart-db`: the API answers 503 for about 6 s.
-- `restart-db` is safe to run any time: since the Nov 24 deploy of `:137bf44` the API replicas
+- `restart-db` is safe to run any time: since the listener heartbeat (deployed Nov 24) the API replicas
   re-LISTEN on the new Postgres by themselves (rehearsed: 3 of 3 back within 6 s).
 - If asked how we inject the failure, switch to the hidden tab: it's one command, repeatable.
 
@@ -196,8 +196,8 @@ then the recovery. **Carla will cover our advanced features.**
 change live.**
 
 **Email notifications.** The alert is **saved in the same transaction as the state change**, so it
-exists **if and only if the change committed.** We killed the dispatcher mid-send: **nothing lost,
-and the resend was deduplicated by Message-ID.** Emails go out through a **DigitalOcean Function
+exists **if and only if the change committed.** We killed the dispatcher mid-send: **nothing lost**,
+and the resend **kept the same Message-ID**, so a duplicate can be recognised. Emails go out through a **DigitalOcean Function
 with SendGrid**, which keeps the SendGrid key **out of our cluster.**
 
 **Security**: **Argon2** passwords, **course roles**, **HTTPS**, **Docker secrets**, and **encrypted

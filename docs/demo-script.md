@@ -34,7 +34,7 @@ infrastructure (containers, Swarm, logs) in the terminal.
 | Slides | `EduPulse-Team26.pptx` | all |
 | Browser A (normal) | https://138-197-173-188.sslip.io signed in as **staff** (`vianne.liu@mail.utoronto.ca`), course **ECE1779** | 4, 5, 6 |
 | Browser B (private window) | Same site, signed in as **student** (`yuanliu0922@gmail.com`), course **ECE1779** | 4 |
-| Browser tab | Inbox with the alert emails | 4 |
+| Browser tab | A course member's real inbox, signed in: the student's Gmail (`yuanliu0922@gmail.com`). Alerts arrive through the DigitalOcean Function and SendGrid | 4 |
 | Browser tab | DigitalOcean console → Monitoring (Uptime check, Alerts), already signed in | 7, optional |
 | Terminal, **shown** | Repository root, font about **20 pt**, `clear` before each command; history preloaded so it is ↑ and Enter | 5, 6, 7 |
 | Terminal, **not shown** | Second tab for `break` and `fix` | 3, 4 |
@@ -53,8 +53,11 @@ scripts/demo.sh services
 All services at full replicas, our five images on one commit (the tag on slide 5).
 
 ```bash
-scripts/demo.sh fix a1-handout && scripts/demo.sh mail-reset
+scripts/demo.sh fix a1-handout
 ```
+
+In the inbox tab, delete earlier EduPulse emails so only the new alert shows. We send without
+domain authentication, so check the spam folder once and mark an EduPulse email "Not spam".
 
 ```bash
 scripts/demo.sh status
@@ -128,7 +131,7 @@ course members get emails, so locally the mailbox shows one email per member you
 | What if a worker dies mid-check? | Its lease expires after 30 s and another worker takes the resource. Shown on the cloud: recovered 37 s after the kill. |
 | What if the manager goes down? | Postgres and Nginx stop until it is back: our single point of failure. Data is on the Volume; a reboot took 52 s. |
 | What happens to live updates when Postgres restarts? | Each API replica pings its LISTEN connection every 10 s and reconnects if it doesn't answer, then sends browsers a full snapshot. Rehearsed: all 3 back within 6 s of a database replacement. |
-| Can an alert be lost or sent twice? | Not lost: written in the same transaction as the state change. A resend after a crash carries the same outbox id as its Message-ID, and the receiving side drops an id it has already sent. |
+| Can an alert be lost or sent twice? | Not lost: written in the same transaction as the state change. Sent twice only if the dispatcher dies after SendGrid accepted it but before marking it sent; the resend carries the same outbox id as its Message-ID. Our mock sink drops it, but Gmail shows both (tested). Exactly-once would need the Function to remember sent ids. |
 | Why a DigitalOcean Function for email? | The SendGrid key lives in the Function, not in our cluster, and it runs only when there is an alert. |
 | How do you avoid false alarms? | DOWN only after 3 consecutive failures; SUSPECT is rechecked sooner. A site failing every third request never alerted. Exception: a 401/403 alerts at once (a known limit). |
 | How is a login wall detected? | A redirect to a login page usually ends in 200, so we look at where the redirect ended, not just the status code. |
@@ -139,5 +142,5 @@ course members get emails, so locally the mailbox shows one email per member you
 ## Afterwards
 
 ```bash
-scripts/demo.sh fix a1-handout && scripts/demo.sh mail-reset
+scripts/demo.sh fix a1-handout
 ```
