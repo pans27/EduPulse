@@ -30,6 +30,15 @@ class ResourceRow(RegistryBase):
     next_check_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     state: Mapped[str | None] = mapped_column(String(20))
     recheck_requested: Mapped[bool] = mapped_column(server_default=false())
+    consecutive_failures: Mapped[int] = mapped_column(server_default="0")
+    lease_token: Mapped[UUID | None]
+
+
+class CredentialRow(RegistryBase):
+    __tablename__ = "credentials"
+
+    resource_id: Mapped[UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), primary_key=True)
+    token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class StudentReportRow(RegistryBase):
@@ -57,6 +66,7 @@ class CourseMemberRow(RegistryBase):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), primary_key=True)
     role: Mapped[str] = mapped_column(String(7))
+    email_opt_in: Mapped[bool] = mapped_column(server_default=false())
 
 
 class SessionRow(RegistryBase):

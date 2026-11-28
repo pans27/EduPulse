@@ -18,12 +18,12 @@ async def wait_for_course_update(
 ) -> None:
     # Wait for a committed update to this course or for a full resync signal.
     while True:
-        resource_id = await notification_queue.get()
+        payload = await notification_queue.get()
         notification_queue.task_done()
-        if resource_id is None:
+        if payload is None or payload == f"course:{course_id}":
             return
         try:
-            resource_uuid = UUID(resource_id)
+            resource_uuid = UUID(payload)
         except ValueError:
             continue
         if await registry.course_for_resource(resource_uuid) == course_id:

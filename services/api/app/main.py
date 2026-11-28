@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import literal, select
@@ -17,6 +19,7 @@ from .admin_routes import admin_sessions, router as admin_router
 from .auth import Auth, router as auth_router
 from .postgres_notifications import PostgresNotifications
 from .postgres_registry import PostgresRegistry
+from .resource_credentials import load_cipher
 from .rest_routes import router as rest_router
 from .websocket_routes import router as websocket_router
 
@@ -35,9 +38,9 @@ async def lifespan(app: FastAPI):
     listener_task = None
     try:
         sessions = async_sessionmaker(engine)
-        app.state.auth = Auth(sessions, secure_cookie=os.getenv("EDUPULSE_AUTH_INSECURE_COOKIE") != "1")
+        app.state.auth = Auth(sessions, secure_cookie=os.getenv("EDUPULSE_LOCAL_TESTING") != "1")
         notification_channel = os.getenv("EDUPULSE_RESOURCE_NOTIFY_CHANNEL") or None
-        app.state.registry = PostgresRegistry(sessions, notification_channel)
+        app.state.registry = PostgresRegistry(sessions, notification_channel, load_cipher())
         notifications = PostgresNotifications(database_url, notification_channel) if notification_channel else None
         app.state.resource_notifications = notifications
         listener_task = asyncio.create_task(notifications.run()) if notifications else None
@@ -57,6 +60,23 @@ app.include_router(rest_router)
 app.include_router(websocket_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def redact_resource_validation(request: Request, error: RequestValidationError) -> JSONResponse:
+    # Validation failures on resource writes must not echo any part of the submitted body.
+    route = request.scope.get("route")
+    if request.method in {"POST", "PATCH"} and getattr(route, "path", "") in {
+        "/api/courses/{course_id}/resources",
+        "/api/courses/{course_id}/resources/{resource_id}",
+    }:
+        return JSONResponse(status_code=422, content={
+            "detail": [
+                {key: issue[key] for key in ("type", "loc", "msg")}
+                for issue in error.errors()
+            ],
+        })
+    return await request_validation_exception_handler(request, error)
 
 
 @app.get("/dashboard/admin/", include_in_schema=False)

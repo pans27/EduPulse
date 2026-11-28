@@ -3,8 +3,10 @@ const assignmentForm = byId("assign-role");
 const coursePicker = byId("assignment-course");
 const rolePicker = byId("assignment-role");
 const assignButton = byId("assign-button");
+const membersCourse = byId("members-course");
 let assigning = false;
 let courseRequest = 0;
+let membersRequest = 0;
 
 // Keep course selection required only for staff and student assignments.
 function updateAssignmentForm() {
@@ -24,13 +26,24 @@ async function loadCourses(preferredCourse = coursePicker.value) {
     if (request !== courseRequest) return;
     const placeholder = courses.length ? "Select a course" : "Create a course first";
     coursePicker.replaceChildren(new Option(placeholder, ""));
+    const previousMembersCourse = membersCourse.value;
+    membersCourse.replaceChildren(new Option(placeholder, ""));
     for (const course of courses) {
       coursePicker.add(new Option(`${course.name} (${course.id})`, course.id));
+      membersCourse.add(new Option(course.name, course.id));
     }
     if (courses.some((course) => course.id === preferredCourse)) coursePicker.value = preferredCourse;
+    membersCourse.value = courses.some((course) => course.id === previousMembersCourse) ? previousMembersCourse : coursePicker.value;
+    membersCourse.disabled = !courses.length;
+    void loadMembers();
   } catch (error) {
     if (request !== courseRequest) return;
     coursePicker.replaceChildren(new Option("Courses unavailable", ""));
+    membersCourse.replaceChildren(new Option("Courses unavailable", ""));
+    membersCourse.disabled = true;
+    ++membersRequest;
+    byId("course-members").replaceChildren();
+    feedback("members-notice", error.message, true);
     feedback("assignment-notice", error.message, true);
   }
   byId("assignment-fields").disabled = false;
@@ -74,11 +87,76 @@ async function assignRole(event) {
   try {
     await api("/api/admin/users/role", fields, "PUT");
     feedback("assignment-notice", fields.role === "admin" ? "Administrator access granted." : "User assigned to course.");
+    if (fields.course_id && fields.course_id === membersCourse.value) void loadMembers();
   } catch (error) {
     feedback("assignment-notice", error.message, true);
   } finally {
     assigning = false;
     updateAssignmentForm();
+  }
+}
+
+// Fetch memberships for the selected course and discard stale responses.
+async function loadMembers(message = "") {
+  const request = ++membersRequest;
+  const list = byId("course-members");
+  const courseId = membersCourse.value;
+  list.replaceChildren();
+  feedback("members-notice", courseId ? "Loading members…" : "");
+  if (!courseId) return;
+  const path = `/api/admin/courses/${encodeURIComponent(courseId)}/members`;
+  try {
+    const members = await api(path);
+    if (request !== membersRequest) return;
+    for (const member of members) list.append(memberRow(member, path, courseId));
+    feedback("members-notice", message || (members.length ? "" : "No members assigned."));
+  } catch (error) {
+    if (request === membersRequest) feedback("members-notice", error.message, true);
+  }
+}
+
+// Build role and removal controls for an existing membership.
+function memberRow(member, path, courseId) {
+  const row = document.createElement("li");
+  const email = document.createElement("strong");
+  email.textContent = member.email;
+  const actions = document.createElement("div");
+  actions.className = "resource-actions";
+  const role = document.createElement("select");
+  role.setAttribute("aria-label", `Course role for ${member.email}`);
+  role.add(new Option("Student", "student"));
+  role.add(new Option("Course staff", "staff"));
+  role.value = member.role;
+  const save = document.createElement("button");
+  save.textContent = "Save role";
+  save.disabled = true;
+  role.addEventListener("change", () => { save.disabled = role.value === member.role; });
+  const remove = document.createElement("button");
+  remove.textContent = "Remove";
+  remove.className = "danger";
+  remove.setAttribute("aria-label", `Remove ${member.email} from the course`);
+  const memberPath = `${path}/${member.user_id}`;
+  save.addEventListener("click", () => updateMember("PATCH", { role: role.value }));
+  remove.addEventListener("click", () => {
+    if (window.confirm(`Remove ${member.email} from this course?`)) void updateMember("DELETE");
+  });
+  actions.append(role, save, remove);
+  row.append(email, actions);
+  return row;
+
+  // Apply the change to the captured membership and refresh the current list.
+  async function updateMember(method, data) {
+    role.disabled = save.disabled = remove.disabled = true;
+    try {
+      await api(memberPath, data, method);
+      if (courseId === membersCourse.value) {
+        await loadMembers(method === "DELETE" ? "Member removed." : "Course role updated.");
+      }
+    } catch (error) {
+      if (courseId === membersCourse.value) feedback("members-notice", error.message, true);
+      role.disabled = remove.disabled = false;
+      save.disabled = role.value === member.role;
+    }
   }
 }
 
@@ -96,6 +174,7 @@ async function loadMetrics() {
 
 rolePicker.addEventListener("change", updateAssignmentForm);
 coursePicker.addEventListener("change", updateAssignmentForm);
+membersCourse.addEventListener("change", () => void loadMembers());
 assignmentForm.addEventListener("submit", assignRole);
 byId("create-course").addEventListener("submit", createCourse);
 void loadCourses();

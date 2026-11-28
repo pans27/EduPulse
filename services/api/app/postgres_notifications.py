@@ -43,7 +43,7 @@ class PostgresNotifications:
         self.subscribers: set[asyncio.Queue[str | None]] = set()
 
     def subscribe(self) -> NotificationSubscription:
-        # Create a subscription where a resource ID requests a refresh and None requests a full resync.
+        # Create a subscription for resource IDs, course invalidations, and full resyncs.
         return NotificationSubscription(self.subscribers)
 
     def _publish(self, resource_id: str | None) -> None:
@@ -60,7 +60,7 @@ class PostgresNotifications:
     def _receive(
         self, _connection: asyncpg.Connection, _sender_process_id: int, _channel: str, payload: str
     ) -> None:
-        # Forward the opaque resource ID without assuming a database ID type.
+        # Forward the invalidation payload without assuming a database ID type.
         if payload.strip():
             self._publish(payload)
 

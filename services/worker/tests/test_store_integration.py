@@ -48,6 +48,7 @@ class StoreTests(IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.pool.execute("DELETE FROM resources WHERE course_id = $1", self.course)
+        await self.pool.execute("DELETE FROM users WHERE email LIKE $1", f"%@{self.course}.example.com")
         await self.pool.execute("DELETE FROM courses WHERE id = $1", self.course)
         await self.pool.close()
 
@@ -65,6 +66,14 @@ class StoreTests(IsolatedAsyncioTestCase):
 
     async def due_in(self, resource_id):
         return await self.pool.fetchval("SELECT next_check_at - now() FROM resources WHERE id = $1", resource_id)
+
+    async def test_claim_loads_ciphertext_and_resource_deletion_cascades(self):
+        # Return ciphertext with the resource lease and remove it on resource deletion.
+        rid = await self.add_resource("protected")
+        await self.pool.execute("INSERT INTO credentials VALUES ($1, $2)", rid, b"encrypted")
+        self.assertEqual((await self.claim_only(rid)).token_ciphertext, b"encrypted")
+        await self.pool.execute("DELETE FROM resources WHERE id = $1", rid)
+        self.assertIsNone(await self.pool.fetchval("SELECT 1 FROM credentials WHERE resource_id = $1", rid))
 
     async def report(self, resource_id):
         async with self.pool.acquire() as conn, conn.transaction():
@@ -111,6 +120,32 @@ class StoreTests(IsolatedAsyncioTestCase):
         await store.record(self.pool, item, ok(item), "ok", None)
         self.assertGreater(await self.due_in(rid), timedelta(seconds=590))
         self.assertFalse(await self.pool.fetchval("SELECT recheck_requested FROM resources WHERE id = $1", rid))
+
+    async def test_incident_alerts_go_to_active_staff_and_opted_in_students(self):
+        rid = await self.add_resource("alert")
+        async with self.pool.acquire() as conn:
+            for name, role, opted_in, active in (
+                ("staff", "staff", False, True),
+                ("subscribed", "student", True, True),
+                ("unsubscribed", "student", False, True),
+                ("inactive", "student", True, False),
+            ):
+                email = f"{name}@{self.course}.example.com"
+                user_id = await conn.fetchval(
+                    "INSERT INTO users (email, password_hash, is_active) VALUES ($1, 'fixture', $2) RETURNING id",
+                    email, active,
+                )
+                await conn.execute(
+                    "INSERT INTO course_members (user_id, course_id, role, email_opt_in) VALUES ($1, $2, $3, $4)",
+                    user_id, self.course, role, opted_in,
+                )
+        item = await self.claim_only(rid)
+        result = await store.record(self.pool, item, Observation(item.url, status=401), "auth", None)
+        self.assertEqual(result.emails_queued, 2)
+        rows = await self.pool.fetch("SELECT recipient_email FROM notification_outbox WHERE resource_id = $1", rid)
+        self.assertEqual({row["recipient_email"] for row in rows}, {
+            f"staff@{self.course}.example.com", f"subscribed@{self.course}.example.com",
+        })
 
     async def test_transport_error_after_auth_required_keeps_the_incident_open(self):
         rid = await self.add_resource("auth", state="AUTH_REQUIRED")

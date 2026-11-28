@@ -41,6 +41,10 @@
       <label>Course <select id="course" disabled></select></label>
     </div>
     <p id="notice" role="status" hidden></p>
+    <div id="course-email" hidden>
+      <label class="checkbox-label"><input id="email-opt-in" type="checkbox" disabled> Email me about incidents in this course</label>
+      <p id="email-status" role="status"></p>
+    </div>
     <div id="course-layout" class="layout">
       <section class="panel" aria-labelledby="resources-title">
         <div class="section-heading"><h2 id="resources-title">Resources</h2><button id="refresh" type="button" disabled>Refresh</button></div>
@@ -53,6 +57,7 @@
           <fieldset id="register-fields" disabled>
             <label>Name<input name="name" required maxlength="120"></label>
             <label>Resource URL<input name="url" type="url" required placeholder="https://"></label>
+            <label>Bearer token (optional)<input name="api_token" type="password" autocomplete="new-password" maxlength="4096"></label>
             <label>Check interval in seconds<input name="interval" type="number" min="1" value="60" required></label>
             <label>Expected release (optional)<input name="release" type="datetime-local"></label>
             <button class="primary">Register</button>
@@ -62,6 +67,25 @@
     </div>
     </div>
   </main>
+  <dialog id="edit-dialog" aria-labelledby="edit-title">
+    <form id="edit-resource">
+      <h2 id="edit-title">Edit resource</h2>
+      <fieldset id="edit-fields">
+        <label>Name<input name="name" required maxlength="120"></label>
+        <label>Resource URL<input name="url" type="url" required></label>
+        <label>Replace bearer token<input name="api_token" type="password" autocomplete="new-password" maxlength="4096"></label>
+        <label class="checkbox-label"><input name="remove_api_token" type="checkbox"> Remove saved bearer token</label>
+        <small>Changing the URL clears the saved token unless you enter a replacement.</small>
+        <label>Check interval in seconds<input name="interval" type="number" min="1" max="2147483647" required></label>
+        <label>Expected release (optional)<input name="release" type="datetime-local"></label>
+        <p id="edit-error" class="feedback" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" id="cancel-edit">Cancel</button>
+          <button type="submit" class="primary">Save changes</button>
+        </div>
+      </fieldset>
+    </form>
+  </dialog>
   <dialog id="report-dialog" aria-labelledby="report-title">
     <form id="report">
       <h2 id="report-title">Report an issue</h2>

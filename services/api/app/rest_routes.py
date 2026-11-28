@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .api_models import Course, ReportCreate, Resource, ResourceCreate, StudentReport
+from .api_models import Course, EmailPreference, ReportCreate, Resource, ResourceCreate, ResourcePatch, StudentReport
 from .auth import require_access
 from .postgres_registry import PostgresRegistry
 
@@ -34,6 +34,24 @@ async def list_resources(course_id: str, registry: Registry, request: Request) -
     return (await registry.get_snapshot(course_id)).resources
 
 
+@router.get("/courses/{course_id}/email-preference")
+async def get_email_preference(course_id: str, registry: Registry, request: Request) -> EmailPreference:
+    # Read the signed-in member's effective course email preference.
+    account = await require_access(request, course_id)
+    return await registry.get_email_preference(course_id, account.user_id)
+
+
+@router.put("/courses/{course_id}/email-preference")
+async def set_email_preference(
+    course_id: str, preference: EmailPreference, registry: Registry, request: Request,
+) -> EmailPreference:
+    # Let a student change only their own membership preference.
+    account = await require_access(request, course_id)
+    if account.courses[course_id] != "student":
+        raise HTTPException(403, "Course staff always receive incident email")
+    return await registry.set_email_preference(course_id, account.user_id, preference)
+
+
 @router.post("/courses/{course_id}/resources", status_code=201)
 async def register_resource(
     course_id: str, resource_input: ResourceCreate, registry: Registry, request: Request
@@ -48,6 +66,22 @@ async def get_resource(course_id: str, resource_id: UUID, registry: Registry, re
     # Return a single resource within its course.
     await require_access(request, course_id)
     return await registry.get_resource(course_id, resource_id)
+
+
+@router.patch("/courses/{course_id}/resources/{resource_id}")
+async def edit_resource(
+    course_id: str, resource_id: UUID, resource_input: ResourcePatch, registry: Registry, request: Request
+) -> Resource:
+    # Let course staff update the selected resource.
+    await require_access(request, course_id, staff=True)
+    return await registry.edit(course_id, resource_id, resource_input)
+
+
+@router.delete("/courses/{course_id}/resources/{resource_id}", status_code=204)
+async def delete_resource(course_id: str, resource_id: UUID, registry: Registry, request: Request) -> None:
+    # Let course staff permanently remove the selected resource.
+    await require_access(request, course_id, staff=True)
+    await registry.delete(course_id, resource_id)
 
 
 @router.post("/courses/{course_id}/resources/{resource_id}/reports", status_code=201)

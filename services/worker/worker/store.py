@@ -48,6 +48,7 @@ class Claim:
     resource_id: UUID
     url: str
     lease_token: UUID
+    token_ciphertext: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -59,8 +60,17 @@ class Recorded:
 
 
 async def claim(pool: asyncpg.Pool, worker_id: str, batch: int, lease_seconds: int) -> list[Claim]:
-    rows = await pool.fetch(CLAIM_SQL, batch, worker_id, float(lease_seconds))
-    return [Claim(row["id"], row["url"], row["lease_token"]) for row in rows]
+    async with pool.acquire() as conn, conn.transaction():
+        rows = await conn.fetch(CLAIM_SQL, batch, worker_id, float(lease_seconds))
+        if not rows:
+            return []
+        # Read credentials in a fresh statement while the claimed resource rows are still locked.
+        credentials = await conn.fetch(
+            "SELECT resource_id, token_ciphertext FROM credentials WHERE resource_id = ANY($1::uuid[])",
+            [row["id"] for row in rows],
+        )
+        tokens = {row["resource_id"]: row["token_ciphertext"] for row in credentials}
+        return [Claim(row["id"], row["url"], row["lease_token"], tokens.get(row["id"])) for row in rows]
 
 
 def _describe(observation: Observation) -> str:

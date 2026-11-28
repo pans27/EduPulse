@@ -5,6 +5,7 @@ inject failures on demand for demos and evaluation. Modes are held in memory,
 which is why this service runs as a single replica.
 """
 import asyncio
+import hmac
 import os
 import random
 import time
@@ -26,7 +27,7 @@ def _admin_token() -> str:
 ADMIN_TOKEN = _admin_token()
 
 Mode = Literal["ok", "not_found", "server_error", "slow", "flapping", "fail_every_k",
-               "login_redirect", "unauthorized", "head_not_allowed"]
+               "login_redirect", "unauthorized", "head_not_allowed", "token_required"]
 
 
 class Behavior(BaseModel):
@@ -42,6 +43,8 @@ behaviors: dict[str, Behavior] = {
     "a1-handout": Behavior(),
     "dataset": Behavior(),
 }
+if os.getenv("FAKE_RESOURCE_TOKEN"):
+    behaviors["token-protected"] = Behavior(mode="token_required")
 hits: dict[str, int] = {}
 load_hits = 0
 load_since = time.monotonic()
@@ -83,6 +86,13 @@ async def resource(name: str, request: Request) -> Response:
             return RedirectResponse(f"/login?next=/r/{name}", status_code=302)
         case "unauthorized":
             return PlainTextResponse("login required", status_code=401)
+        case "token_required":
+            expected = os.getenv("FAKE_RESOURCE_TOKEN")
+            authorization = request.headers.get("Authorization", "")
+            if not expected or not hmac.compare_digest(authorization.encode(), f"Bearer {expected}".encode()):
+                return PlainTextResponse("bearer token required", status_code=401,
+                                         headers={"WWW-Authenticate": "Bearer"})
+            return PlainTextResponse(f"{name}: content")
         case "head_not_allowed":
             if request.method == "HEAD":
                 return Response(status_code=405)

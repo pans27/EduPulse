@@ -20,7 +20,7 @@ class DatabaseAuthTests(TestCase):
         self.enterContext(patch.dict(os.environ, {
             "DATABASE_URL": "postgresql://unused",
             "EDUPULSE_RESOURCE_NOTIFY_CHANNEL": "",
-            "EDUPULSE_AUTH_INSECURE_COOKIE": "0",
+            "EDUPULSE_LOCAL_TESTING": "0",
         }))
         session = MagicMock(spec=AsyncSession)
         sessions = MagicMock()
@@ -33,7 +33,7 @@ class DatabaseAuthTests(TestCase):
         session.scalar.return_value = UserRow(id=uuid4(), password_hash=hasher.hash("example-test-password"))
         self.memberships = MagicMock()
         session.execute.return_value = self.memberships
-        self.memberships.all.return_value = [SimpleNamespace(is_admin=False, course_id="demo", role="student")]
+        self.memberships.all.return_value = [SimpleNamespace(id=uuid4(), is_admin=False, course_id="demo", role="student")]
 
     def test_login_and_account_status(self):
         # Verify a password, issue a secure cookie, and reject a session for a disabled user.

@@ -66,6 +66,9 @@ services:
 
   api:
     <<: *db-client
+    secrets:
+      - pg_password
+      - resource_token_key
     image: ${REGISTRY:-edupulse}/api:${TAG:-dev}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     environment:
@@ -94,6 +97,9 @@ services:
 
   worker:
     <<: *db-client
+    secrets:
+      - pg_password
+      - resource_token_key
     image: ${REGISTRY:-edupulse}/worker:${TAG:-dev}
     command: ["python", "-m", "worker"]
     environment:
@@ -192,6 +198,8 @@ secrets:
   pg_password:
     external: true
   fake_admin_token:
+    external: true
+  resource_token_key:
     external: true
 
 configs:
