@@ -1,8 +1,8 @@
 """Mock mail endpoint: stands in for the DigitalOcean Function + SendGrid during tests and demos.
 
 It accepts the same JSON the dispatcher will send to the Function, keeps every message in
-memory, and drops a resend with a Message-ID it has already delivered, the way a mailbox such
-as Gmail does. Admin endpoints let a test make it fail on purpose to exercise retries.
+memory, and drops a resend with a Message-ID it has already delivered, so the crash test can
+count duplicates. (Real mailboxes do not do this: Gmail showed both copies.) Admin endpoints let a test make it fail on purpose to exercise retries.
 """
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel

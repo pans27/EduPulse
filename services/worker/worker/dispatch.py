@@ -6,7 +6,8 @@ mark each row sent only if this dispatcher still holds its lease.
 
 Delivery is at-least-once. If the dispatcher dies after the mail endpoint accepted a message but
 before the row is marked sent, the lease expires and the row is sent again, with the same
-Message-ID (the outbox id), so the receiving side can drop the duplicate.
+Message-ID (the outbox id), so the duplicate can be recognised. The mock sink drops it; a real
+mailbox such as Gmail shows both copies.
 """
 import asyncio
 import json

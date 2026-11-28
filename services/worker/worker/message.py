@@ -15,7 +15,8 @@ SUBJECTS = {
 
 def message_id(outbox_id: str) -> str:
     # The outbox row id doubles as the email Message-ID. A resend after a crash carries the same
-    # id, so the receiving side can drop the duplicate (the mock sink does; Gmail does too).
+    # id, so the duplicate can be recognised. The mock sink drops it; Gmail does not (tested
+    # Nov 27 through the Function: both copies were shown).
     return f"<{outbox_id}@edupulse>"
 
 

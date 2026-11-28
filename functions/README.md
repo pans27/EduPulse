@@ -26,7 +26,8 @@ retried (10 s doubling to 15 min, 8 attempts), so fixing the key in time loses n
 
 Delivery is at least once: if the dispatcher dies after a 202 but before it marks the row sent, the
 alert is sent again with the same `Message-ID`. The Function keeps no state, so it does not drop
-that resend itself.
+that resend, and neither does Gmail: two sends with one `Message-ID` on Nov 27 showed as two
+emails. Exactly-once would need the Function to remember sent ids (e.g. in object storage).
 
 ## One-time setup
 
